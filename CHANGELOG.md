@@ -15,6 +15,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a per-query memory ceiling. Filter by domain, client IP, and action.
 - `qlog` config section (`enabled`, `dir`, `max_bytes`, `flush_secs`,
   `flush_rows`, `log_client_ip`, `mem_limit_mb`).
+- End-to-end test (`tests/e2e.rs`) that boots the real binary against a local
+  stub upstream and checks blocking, wildcards, caching, auth, live blocklist
+  edits, and query logging.
+- GitHub Actions CI (fmt, clippy, build, test on Ubuntu) and a tag-triggered
+  release workflow that publishes an `x86_64-unknown-linux-gnu` build.
 
 ## [0.1.0] - 2026-06-27
 

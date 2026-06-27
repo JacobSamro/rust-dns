@@ -81,7 +81,7 @@ dig @127.0.0.1 -p 5353 example.com    # -> forwarded + cached
 ## The portal
 
 Open `http://<server>:8080` and sign in with the admin token from
-`config.toml`. The sidebar has four screens:
+`config.toml`. The sidebar has these screens:
 
 - **Dashboard** shows live counters (queries, blocked, cache hit rate,
   forwarded, cache entries, upstream errors, uptime) and refreshes every few
