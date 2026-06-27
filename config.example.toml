@@ -1,0 +1,37 @@
+# rust-dns configuration. Copy to config.toml (or pass a path as argv[1]).
+# If config.toml is missing, the server writes these defaults on first run.
+
+[dns]
+# DNS listen address (UDP + TCP). Port 53 needs root / a capability (see README).
+bind = "0.0.0.0:53"
+# SO_REUSEPORT sockets / receive loops. 0 = one per CPU core.
+workers = 0
+# How blocked domains are answered: "zero_ip" (return 0.0.0.0 / ::) or "nxdomain".
+sinkhole_mode = "zero_ip"
+sinkhole_ipv4 = "0.0.0.0"
+sinkhole_ipv6 = "::"
+sinkhole_ttl = 60
+
+[upstream]
+# Plain UDP/TCP resolvers, tried in order. Edit live from the web UI.
+servers = ["1.1.1.1:53", "8.8.8.8:53"]
+timeout_ms = 2000
+# Burst guard: max simultaneous in-flight queries to upstream.
+max_concurrent = 256
+# Hard ceiling on queries-per-second to upstream.
+max_qps = 2000
+
+[cache]
+# Entry cap bounds memory + snapshot size (well under 1 GB; ~150 MB at 500k).
+max_entries = 500000
+snapshot_path = "cache.snapshot.json"
+snapshot_interval_secs = 60
+min_ttl = 30
+max_ttl = 86400
+negative_ttl = 60
+
+[web]
+bind = "0.0.0.0:8080"
+# CHANGE THIS. Sent as `Authorization: Bearer <token>`. Empty = no auth.
+admin_token = "change-me"
+blocklist_path = "blocklist.txt"
