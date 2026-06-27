@@ -55,13 +55,10 @@ async fn auth(State(state): State<SharedState>, req: Request, next: Next) -> Res
         .and_then(|v| v.to_str().ok())
         .map(|s| s == token)
         .unwrap_or(false);
-    let query_token = req
-        .uri()
-        .query()
-        .map(|q| q.split('&').any(|kv| kv == format!("token={token}")))
-        .unwrap_or(false);
 
-    if header_bearer || header_token || query_token {
+    // Note: no `?token=` query param — it would leak the secret into logs,
+    // history, and referrers. Use the Authorization or X-Admin-Token header.
+    if header_bearer || header_token {
         next.run(req).await
     } else {
         (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
@@ -100,7 +97,7 @@ async fn set_blocklist(
 ) -> Result<Json<BlocklistResponse>, AppError> {
     let bl = Blocklist::from_text(&body.text);
     let path = state.config.load().web.blocklist_path.clone();
-    std::fs::write(&path, bl.to_file_text())?;
+    crate::config::write_atomic(Path::new(&path), bl.to_file_text().as_bytes())?;
     let resp = BlocklistResponse {
         count: bl.len(),
         domains: bl.to_sorted_vec(),
@@ -160,12 +157,23 @@ async fn set_config(
     Json(body): Json<ConfigUpdate>,
 ) -> Result<Json<ConfigView>, AppError> {
     let mut cfg = (**state.config.load()).clone();
-    cfg.upstream.servers = body
+    let servers: Vec<String> = body
         .upstream_servers
         .into_iter()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    if servers.is_empty() {
+        return Err(AppError::msg("at least one upstream server is required"));
+    }
+    for s in &servers {
+        if s.parse::<SocketAddr>().is_err() {
+            return Err(AppError::msg(&format!(
+                "invalid upstream '{s}' (expected host:port)"
+            )));
+        }
+    }
+    cfg.upstream.servers = servers;
     cfg.upstream.timeout_ms = body.timeout_ms;
     cfg.upstream.max_qps = body.max_qps;
     cfg.upstream.max_concurrent = body.max_concurrent;

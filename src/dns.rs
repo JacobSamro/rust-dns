@@ -15,9 +15,13 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::time::timeout;
+
+/// Idle/slow-read timeout for a TCP DNS connection.
+const TCP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Process one raw DNS query, returning the raw response to send back.
 /// Returns `None` for unparseable packets (dropped silently).
@@ -57,7 +61,8 @@ pub async fn handle(state: &AppState, data: &[u8], client: Option<IpAddr>) -> Op
                 .cache
                 .try_get_with(key, async move {
                     let resp = upstream.resolve(&data_owned).await?;
-                    let _ = persist.send((pkey, resp.clone()));
+                    // Best-effort: drop the persist if the writer is backed up.
+                    let _ = persist.try_send((pkey, resp.clone()));
                     Ok::<_, anyhow::Error>(resp)
                 })
                 .await;
@@ -84,7 +89,7 @@ pub async fn handle(state: &AppState, data: &[u8], client: Option<IpAddr>) -> Op
         } else {
             String::new()
         };
-        let _ = tx.send(LogRecord {
+        let _ = tx.try_send(LogRecord {
             ts_ms: now_ms(),
             client: client_str,
             domain: name,
@@ -197,10 +202,20 @@ async fn udp_worker(state: SharedState, sock: Arc<UdpSocket>) {
     loop {
         match sock.recv_from(&mut buf).await {
             Ok((len, peer)) => {
+                // Bound concurrent work: if the pool is full, drop the packet
+                // rather than spawning unbounded tasks under load.
+                let permit = match state.inflight.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        state.stats.dropped.fetch_add(1, Relaxed);
+                        continue;
+                    }
+                };
                 let data = buf[..len].to_vec();
                 let state = state.clone();
                 let sock = sock.clone();
                 tokio::spawn(async move {
+                    let _permit = permit;
                     if let Some(resp) = handle(&state, &data, Some(peer.ip())).await {
                         let _ = sock.send_to(&resp, peer).await;
                     }
@@ -232,18 +247,41 @@ pub async fn spawn_tcp(state: SharedState, addr: SocketAddr) -> Result<()> {
 
 async fn tcp_conn(state: &AppState, mut stream: TcpStream, client: IpAddr) -> Result<()> {
     loop {
+        // Slow-read guard: bail if the peer stalls between/within messages.
         let mut len_buf = [0u8; 2];
-        if stream.read_exact(&mut len_buf).await.is_err() {
-            break; // connection closed
+        match timeout(TCP_TIMEOUT, stream.read_exact(&mut len_buf)).await {
+            Ok(Ok(_)) => {}
+            _ => break, // closed, error, or timed out
         }
         let len = u16::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
-        stream.read_exact(&mut buf).await?;
-        if let Some(resp) = handle(state, &buf, Some(client)).await {
+        match timeout(TCP_TIMEOUT, stream.read_exact(&mut buf)).await {
+            Ok(Ok(_)) => {}
+            _ => break,
+        }
+
+        // Same concurrency cap as UDP.
+        let permit = match state.inflight.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                state.stats.dropped.fetch_add(1, Relaxed);
+                break;
+            }
+        };
+        let resp = handle(state, &buf, Some(client)).await;
+        drop(permit);
+
+        if let Some(resp) = resp {
             let rlen = (resp.len() as u16).to_be_bytes();
-            stream.write_all(&rlen).await?;
-            stream.write_all(&resp).await?;
-            stream.flush().await?;
+            let write = async {
+                stream.write_all(&rlen).await?;
+                stream.write_all(&resp).await?;
+                stream.flush().await
+            };
+            match timeout(TCP_TIMEOUT, write).await {
+                Ok(Ok(_)) => {}
+                _ => break,
+            }
         }
     }
     Ok(())

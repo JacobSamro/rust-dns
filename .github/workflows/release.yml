@@ -30,9 +30,17 @@ jobs:
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache cargo & target
         uses: Swatinem/rust-cache@v2
+
+      - name: Gate on checks (fmt, clippy, tests)
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test --release --locked
 
       - name: Build release
         run: cargo build --release --locked --target "$TARGET"

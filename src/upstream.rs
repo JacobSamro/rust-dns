@@ -12,7 +12,7 @@ use crate::config::UpstreamConfig;
 use anyhow::{anyhow, Result};
 use arc_swap::ArcSwap;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
-use hickory_proto::op::{Message, ResponseCode};
+use hickory_proto::op::{Message, MessageType, ResponseCode};
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -70,7 +70,10 @@ impl Upstream {
         let mut last_err = anyhow!("upstream unreachable");
         for &server in servers.iter() {
             match self.query_udp(server, query_wire).await {
-                Ok(wire) => return Ok(Arc::new(self.to_cached(wire))),
+                Ok(wire) if valid_response(query_wire, &wire) => {
+                    return Ok(Arc::new(self.to_cached(wire)))
+                }
+                Ok(_) => last_err = anyhow!("upstream response did not match query"),
                 Err(e) => last_err = e,
             }
         }
@@ -140,5 +143,25 @@ impl Upstream {
             None => self.negative_ttl,
         };
         ttl.clamp(self.min_ttl, self.max_ttl)
+    }
+}
+
+/// Guard against cache poisoning / off-path spoofing: only accept a reply that
+/// parses, is a response, echoes our transaction id, and answers our question.
+fn valid_response(query: &[u8], resp: &[u8]) -> bool {
+    let (q, r) = match (Message::from_vec(query), Message::from_vec(resp)) {
+        (Ok(q), Ok(r)) => (q, r),
+        _ => return false,
+    };
+    if r.metadata.message_type != MessageType::Response || r.metadata.id != q.metadata.id {
+        return false;
+    }
+    match (q.queries.first(), r.queries.first()) {
+        (Some(qq), Some(rq)) => {
+            qq.name() == rq.name()
+                && qq.query_type() == rq.query_type()
+                && qq.query_class() == rq.query_class()
+        }
+        _ => false,
     }
 }

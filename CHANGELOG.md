@@ -6,15 +6,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- Config loading no longer fails when the `[cache]` section omits the newer
-  `db_path`, `flush_ms`, or `purge_interval_secs` fields — they fall back to
-  defaults, so configs from before those fields existed keep working.
-
 ## [0.1.0] - 2026-06-27
 
 First release: a blocking DNS resolver with a web admin portal.
+
+### Security
+
+- Admin portal binds `127.0.0.1` by default; no usable default credential — an
+  empty `web.admin_token` generates a strong random token on first run.
+- API auth is header-only (`Authorization: Bearer` / `X-Admin-Token`); no
+  `?token=` query param.
+- The DNS hot path is bounded against overload: `dns.max_inflight` caps
+  concurrent queries (excess dropped, counted as `dropped`), TCP connections
+  have read/write timeouts, and the persist + query-log channels are bounded.
+- Upstream replies are validated (response bit, transaction id, question match)
+  before being cached or served.
+- The admin UI builds list rows with DOM APIs instead of interpolated HTML
+  (no stored XSS); config and blocklist writes are atomic; `POST /api/config`
+  rejects an empty or malformed upstream list.
 
 ### Added
 

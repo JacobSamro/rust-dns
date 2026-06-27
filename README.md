@@ -23,6 +23,7 @@ in an afternoon. Contributions are welcome — see [Contributing](#contributing)
 - [HTTP API](#http-api)
 - [Configuration](#configuration)
 - [Deploy with systemd](#deploy-with-systemd)
+- [Security](#security)
 - [How it works](#how-it-works)
 - [Notes and tradeoffs](#notes-and-tradeoffs)
 - [Roadmap](#roadmap)
@@ -101,7 +102,7 @@ Open `http://<server>:8080` and sign in with the admin token from
 ## HTTP API
 
 Everything under `/api` requires the token, sent as
-`Authorization: Bearer <token>` (or an `X-Admin-Token:` header, or `?token=`).
+`Authorization: Bearer <token>` (or an `X-Admin-Token:` header).
 
 | Method | Path | Body / Notes |
 |---|---|---|
@@ -123,6 +124,8 @@ fields are saved to `config.toml` and take effect on the next restart.
 
 - `dns.sinkhole_mode` — `"zero_ip"` (return `sinkhole_ipv4`/`ipv6`) or `"nxdomain"`.
 - `dns.workers` — `0` means one `SO_REUSEPORT` socket per core.
+- `dns.max_inflight` — cap on concurrently-handled queries; excess packets are
+  dropped (counted as `dropped`) instead of spawning unbounded work.
 - `upstream.servers` — plain `host:port` resolvers, tried in order.
 - `upstream.max_qps` / `max_concurrent` — the upstream rate and burst limits.
 - `cache.max_entries` — caps in-RAM memory (500k is roughly 150 MB).
@@ -151,6 +154,21 @@ sudo systemctl daemon-reload && sudo systemctl enable --now rust-dns
 Run it on as many boxes as you like. To sync a blocklist between them, copy
 `blocklist.txt` over with `scp` or `rsync` and it reloads itself, or POST the
 list to that server's API.
+
+## Security
+
+- The admin portal binds `127.0.0.1` by default. Only move it to `0.0.0.0`
+  behind a firewall or VPN.
+- On first run, if `web.admin_token` is empty it generates a strong random token
+  and writes it to the config (logged once at startup). There is no usable
+  default credential.
+- API auth is via the `Authorization: Bearer` (or `X-Admin-Token`) header only —
+  the token is never accepted in the URL.
+- Inbound DNS is attacker-controlled, so the resolver bounds its work:
+  `dns.max_inflight` caps concurrent queries, TCP connections have read/write
+  timeouts, the persist and query-log channels are bounded (drops over capacity,
+  surfaced as `dropped`), and upstream replies are validated (response bit,
+  transaction id, and question must match) before caching.
 
 ## How it works
 

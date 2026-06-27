@@ -10,6 +10,7 @@ pub struct Stats {
     pub cache_hits: AtomicU64,
     pub forwarded: AtomicU64,
     pub upstream_errors: AtomicU64,
+    pub dropped: AtomicU64,
     started: Instant,
 }
 
@@ -21,6 +22,7 @@ impl Default for Stats {
             cache_hits: AtomicU64::new(0),
             forwarded: AtomicU64::new(0),
             upstream_errors: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
             started: Instant::now(),
         }
     }
@@ -33,6 +35,7 @@ pub struct StatsSnapshot {
     pub cache_hits: u64,
     pub forwarded: u64,
     pub upstream_errors: u64,
+    pub dropped: u64,
     pub cache_hit_rate: f64,
     pub uptime_secs: u64,
     pub cache_entries: u64,
@@ -50,6 +53,7 @@ impl Stats {
             cache_hits: hits,
             forwarded: fwd,
             upstream_errors: self.upstream_errors.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
             cache_hit_rate: if lookups > 0 {
                 hits as f64 / lookups as f64
             } else {

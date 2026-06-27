@@ -38,16 +38,28 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("config.toml"));
 
-    let cfg = Config::load_or_create(&config_path)?;
+    let mut cfg = Config::load_or_create(&config_path)?;
+
+    // Never run with the old default credential. If the token is unset (or the
+    // legacy "change-me"), generate a strong random one and persist it.
+    if cfg.web.admin_token.is_empty() || cfg.web.admin_token == "change-me" {
+        let token = random_token();
+        cfg.web.admin_token = token.clone();
+        cfg.save(&config_path)?;
+        tracing::warn!("generated admin token (saved to config): {token}");
+    }
+
     let blocklist = Blocklist::from_file(Path::new(&cfg.web.blocklist_path))?;
     tracing::info!("loaded {} blocked domains", blocklist.len());
 
     let cache = cache::build(&cfg.cache);
 
-    // Durable backing store (redb) + warm load into RAM.
+    // Durable backing store (redb) + warm load into RAM, capped at the RAM
+    // cache size so a large store can't OOM us on startup.
     let store = Arc::new(cache::Store::open(Path::new(&cfg.cache.db_path))?);
     match store.read_all_valid() {
-        Ok(entries) => {
+        Ok(mut entries) => {
+            entries.truncate(cfg.cache.max_entries as usize);
             let n = entries.len();
             for (k, v) in entries {
                 cache.insert(k, Arc::new(v)).await;
@@ -57,17 +69,19 @@ async fn main() -> Result<()> {
         Err(e) => tracing::warn!("could not load cache store: {e}"),
     }
 
-    let (persist_tx, persist_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (persist_tx, persist_rx) = tokio::sync::mpsc::channel(cache::PERSIST_CHANNEL_CAP);
 
     // Query logging (Parquet + DataFusion), optional.
     let qlog_tx = if cfg.qlog.enabled {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::channel(qlog::LOG_CHANNEL_CAP);
         tokio::spawn(qlog::run_writer(cfg.qlog.clone(), rx));
         tracing::info!("query logging on -> {}", cfg.qlog.dir);
         Some(tx)
     } else {
         None
     };
+
+    let inflight = Arc::new(tokio::sync::Semaphore::new(cfg.dns.max_inflight.max(1)));
 
     let upstream = Upstream::new(
         &cfg.upstream,
@@ -81,6 +95,7 @@ async fn main() -> Result<()> {
         config: ArcSwap::from_pointee(cfg.clone()),
         blocklist: ArcSwap::from_pointee(blocklist),
         cache: cache.clone(),
+        inflight,
         persist: persist_tx,
         qlog: qlog_tx,
         upstream,
@@ -138,4 +153,22 @@ async fn main() -> Result<()> {
     // The write-behind persister flushes on its interval; entries from the last
     // sub-second window may not be on disk, which is fine for a cache.
     Ok(())
+}
+
+/// 32 bytes of OS randomness, hex-encoded. Falls back to a time/pid seed only
+/// if `/dev/urandom` is unavailable (then logs a warning at the call site).
+fn random_token() -> String {
+    use std::io::Read;
+    let mut buf = [0u8; 32];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        if f.read_exact(&mut buf).is_ok() {
+            return buf.iter().map(|b| format!("{b:02x}")).collect();
+        }
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+        ^ (std::process::id() as u128);
+    format!("{seed:032x}")
 }

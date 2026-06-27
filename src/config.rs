@@ -61,6 +61,13 @@ pub struct DnsConfig {
     pub sinkhole_ipv6: std::net::Ipv6Addr,
     /// TTL (seconds) put on sinkhole answers.
     pub sinkhole_ttl: u32,
+    /// Max queries handled concurrently. Excess packets are dropped (DoS guard).
+    #[serde(default = "default_max_inflight")]
+    pub max_inflight: usize,
+}
+
+fn default_max_inflight() -> usize {
+    8192
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,6 +132,7 @@ impl Default for Config {
                 sinkhole_ipv4: std::net::Ipv4Addr::UNSPECIFIED,
                 sinkhole_ipv6: std::net::Ipv6Addr::UNSPECIFIED,
                 sinkhole_ttl: 60,
+                max_inflight: default_max_inflight(),
             },
             upstream: UpstreamConfig {
                 servers: vec!["1.1.1.1:53".into(), "8.8.8.8:53".into()],
@@ -142,8 +150,11 @@ impl Default for Config {
                 negative_ttl: 60,
             },
             web: WebConfig {
-                bind: "0.0.0.0:8080".into(),
-                admin_token: "change-me".into(),
+                // Localhost by default: the admin API is unauthenticated-adjacent
+                // surface, so don't expose it on all interfaces out of the box.
+                bind: "127.0.0.1:8080".into(),
+                // Empty means "generate a random token on first run" (see main).
+                admin_token: String::new(),
                 blocklist_path: "blocklist.txt".into(),
             },
             qlog: QlogConfig::default(),
@@ -168,7 +179,8 @@ impl Config {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let text = toml::to_string_pretty(self).context("serializing config")?;
-        std::fs::write(path, text).with_context(|| format!("writing config {}", path.display()))?;
+        write_atomic(path, text.as_bytes())
+            .with_context(|| format!("writing config {}", path.display()))?;
         Ok(())
     }
 
@@ -179,4 +191,12 @@ impl Config {
             .filter_map(|s| s.parse().ok())
             .collect()
     }
+}
+
+/// Write `bytes` to `path` durably: write a temp file, then atomically rename,
+/// so a crash mid-write can't leave a truncated/corrupt file.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
 }

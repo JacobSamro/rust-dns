@@ -9,11 +9,14 @@ use crate::upstream::Upstream;
 use arc_swap::ArcSwap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 pub struct AppState {
     pub config: ArcSwap<Config>,
     pub blocklist: ArcSwap<Blocklist>,
     pub cache: DnsCache,
+    /// Caps concurrently-handled queries; a full pool means packets are dropped.
+    pub inflight: Arc<Semaphore>,
     /// Write-behind channel to the redb durability store.
     pub persist: PersistTx,
     /// Query-log channel (None when logging is disabled).

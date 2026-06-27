@@ -189,8 +189,12 @@ fn dec_val(b: &[u8]) -> Option<CachedResponse> {
 // Write-behind plumbing
 // ---------------------------------------------------------------------------
 
-pub type PersistTx = mpsc::UnboundedSender<(CacheKey, Arc<CachedResponse>)>;
-pub type PersistRx = mpsc::UnboundedReceiver<(CacheKey, Arc<CachedResponse>)>;
+pub type PersistTx = mpsc::Sender<(CacheKey, Arc<CachedResponse>)>;
+pub type PersistRx = mpsc::Receiver<(CacheKey, Arc<CachedResponse>)>;
+
+/// Bounded so a lagging disk can't grow memory without limit; on overflow the
+/// hot path drops the persist (the entry still lives in RAM).
+pub const PERSIST_CHANNEL_CAP: usize = 100_000;
 
 const BATCH_MAX: usize = 256;
 

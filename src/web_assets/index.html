@@ -497,6 +497,7 @@ async function loadStats(){
       {k:"Forwarded", v:fmtNum(s.forwarded), ico:ICON.globe},
       {k:"Cache entries", v:fmtNum(s.cache_entries), ico:ICON.info},
       {k:"Upstream errors", v:fmtNum(s.upstream_errors), cls:s.upstream_errors>0?"warn":"", ico:ICON.info},
+      {k:"Dropped (overload)", v:fmtNum(s.dropped), cls:s.dropped>0?"warn":"", ico:ICON.info},
       {k:"Uptime", v:fmtDur(s.uptime_secs), ico:ICON.info},
     ];
     document.getElementById("statCards").innerHTML = cards.map(c=>`
@@ -519,16 +520,21 @@ function renderDomains(){
   const shown = domains.filter(d=>!q || d.includes(q));
   document.getElementById("navBlCount").textContent = domains.length;
   document.getElementById("domainCount").textContent = q ? `${shown.length} of ${domains.length} shown` : `${domains.length} domain${domains.length===1?'':'s'} blocked`;
-  if(!shown.length){ list.innerHTML = `<div class="empty">${domains.length? 'No domains match your filter.' : 'No domains blocked yet. Add one above.'}</div>`; return; }
-  list.innerHTML = shown.map(d=>{
+  list.replaceChildren();
+  if(!shown.length){ const e=document.createElement("div"); e.className="empty"; e.textContent = domains.length? "No domains match your filter." : "No domains blocked yet. Add one above."; list.appendChild(e); return; }
+  // Build rows with DOM APIs (no HTML interpolation of user values).
+  for(const d of shown){
     const wild = d.startsWith("*.");
-    return `
-    <div class="list-row">
-      <span class="rico">${wild?ICON.asterisk:ICON.ban}</span>
-      <span class="val mono">${esc(d)}</span>
-      ${wild?'<span class="badge">subdomains only</span>':''}
-      <button class="btn btn-destructive btn-icon" title="Remove" onclick="removeDomain('${esc(d)}')">${ICON.trash}</button>
-    </div>`;}).join("");
+    const row = document.createElement("div"); row.className="list-row";
+    const ico = document.createElement("span"); ico.className="rico"; ico.innerHTML = wild?ICON.asterisk:ICON.ban;
+    const val = document.createElement("span"); val.className="val mono"; val.textContent = d;
+    row.append(ico, val);
+    if(wild){ const b=document.createElement("span"); b.className="badge"; b.textContent="subdomains only"; row.appendChild(b); }
+    const btn = document.createElement("button"); btn.className="btn btn-destructive btn-icon"; btn.title="Remove"; btn.innerHTML=ICON.trash;
+    btn.addEventListener("click", ()=>removeDomain(d));
+    row.appendChild(btn);
+    list.appendChild(row);
+  }
 }
 async function addDomain(){
   const inp = document.getElementById("domainInput"); const v = inp.value.trim();
@@ -565,14 +571,18 @@ function renderServers(){
   const list = document.getElementById("serverList");
   document.getElementById("navUpCount").textContent = servers.length;
   document.getElementById("serverCount").textContent = `${servers.length} resolver${servers.length===1?'':'s'} · tried in order`;
-  if(!servers.length){ list.innerHTML = `<div class="empty">No upstream resolvers. Add at least one.</div>`; return; }
-  list.innerHTML = servers.map((s,i)=>`
-    <div class="list-row">
-      <span class="rico">${ICON.globe}</span>
-      <span class="val mono">${esc(s)}</span>
-      <span class="meta">priority ${i+1}</span>
-      <button class="btn btn-destructive btn-icon" title="Remove" onclick="removeServer('${esc(s)}')">${ICON.trash}</button>
-    </div>`).join("");
+  list.replaceChildren();
+  if(!servers.length){ const e=document.createElement("div"); e.className="empty"; e.textContent="No upstream resolvers. Add at least one."; list.appendChild(e); return; }
+  servers.forEach((s,i)=>{
+    const row=document.createElement("div"); row.className="list-row";
+    const ico=document.createElement("span"); ico.className="rico"; ico.innerHTML=ICON.globe;
+    const val=document.createElement("span"); val.className="val mono"; val.textContent=s;
+    const meta=document.createElement("span"); meta.className="meta"; meta.textContent=`priority ${i+1}`;
+    const btn=document.createElement("button"); btn.className="btn btn-destructive btn-icon"; btn.title="Remove"; btn.innerHTML=ICON.trash;
+    btn.addEventListener("click", ()=>removeServer(s));
+    row.append(ico, val, meta, btn);
+    list.appendChild(row);
+  });
 }
 async function addServer(){
   const inp = document.getElementById("serverInput"); let v = inp.value.trim();

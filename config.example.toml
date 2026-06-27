@@ -11,6 +11,8 @@ sinkhole_mode = "zero_ip"
 sinkhole_ipv4 = "0.0.0.0"
 sinkhole_ipv6 = "::"
 sinkhole_ttl = 60
+# Max queries handled at once; excess packets are dropped (DoS guard).
+max_inflight = 8192
 
 [upstream]
 # Plain UDP/TCP resolvers, tried in order. Edit live from the web UI.
@@ -49,7 +51,9 @@ log_client_ip = true
 mem_limit_mb = 128
 
 [web]
-bind = "0.0.0.0:8080"
-# CHANGE THIS. Sent as `Authorization: Bearer <token>`. Empty = no auth.
-admin_token = "change-me"
+# Localhost by default. Only expose on 0.0.0.0 behind a firewall/VPN.
+bind = "127.0.0.1:8080"
+# Sent as `Authorization: Bearer <token>`. Leave empty and a strong random
+# token is generated and written here on first run.
+admin_token = ""
 blocklist_path = "blocklist.txt"

@@ -35,8 +35,12 @@ pub struct LogRecord {
     pub latency_ms: u32,
 }
 
-pub type LogTx = mpsc::UnboundedSender<LogRecord>;
-pub type LogRx = mpsc::UnboundedReceiver<LogRecord>;
+pub type LogTx = mpsc::Sender<LogRecord>;
+pub type LogRx = mpsc::Receiver<LogRecord>;
+
+/// Bounded; if logging falls behind, the hot path drops records rather than
+/// growing memory unbounded under load.
+pub const LOG_CHANNEL_CAP: usize = 100_000;
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
