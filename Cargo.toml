@@ -12,6 +12,7 @@ categories = ["network-programming", "caching"]
 anyhow = "1"
 arc-swap = "1"
 axum = "0.8"
+datafusion = "54.0.0"
 governor = "0.10"
 hickory-proto = "0.26"
 moka = { version = "0.12", features = ["future"] }

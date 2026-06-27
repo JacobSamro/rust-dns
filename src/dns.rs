@@ -5,21 +5,24 @@
 
 use crate::cache::CacheKey;
 use crate::config::DnsConfig;
+use crate::qlog::{now_ms, LogRecord};
 use crate::state::{AppState, SharedState};
 use anyhow::Result;
 use hickory_proto::op::{Message, Query, ResponseCode};
 use hickory_proto::rr::rdata::{A, AAAA};
 use hickory_proto::rr::{RData, Record, RecordType};
 use socket2::{Domain, Protocol, Socket, Type};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 /// Process one raw DNS query, returning the raw response to send back.
 /// Returns `None` for unparseable packets (dropped silently).
-pub async fn handle(state: &AppState, data: &[u8]) -> Option<Vec<u8>> {
+pub async fn handle(state: &AppState, data: &[u8], client: Option<IpAddr>) -> Option<Vec<u8>> {
+    let start = Instant::now();
     let request = Message::from_vec(data).ok()?;
     let query = request.queries.first()?.clone();
     state.stats.queries.fetch_add(1, Relaxed);
@@ -27,52 +30,68 @@ pub async fn handle(state: &AppState, data: &[u8]) -> Option<Vec<u8>> {
     let name = query.name().to_string();
     let name = name.trim_end_matches('.').to_lowercase();
     let qtype = query.query_type();
-
     let cfg = state.config.load();
 
-    if state.blocklist.load().is_blocked(&name) {
+    let (response, action) = if state.blocklist.load().is_blocked(&name) {
         state.stats.blocked.fetch_add(1, Relaxed);
-        return Some(build_blocked(&request, &query, &cfg.dns));
-    }
+        (build_blocked(&request, &query, &cfg.dns), "blocked")
+    } else {
+        let key = CacheKey {
+            name: name.clone(),
+            rtype: u16::from(qtype),
+        };
+        let id = request.metadata.id;
 
-    let key = CacheKey {
-        name,
-        rtype: u16::from(qtype),
+        if let Some(cached) = state.cache.get(&key).await {
+            state.stats.cache_hits.fetch_add(1, Relaxed);
+            (patch_id(&cached.wire, id), "cached")
+        } else {
+            // Miss: forward. `try_get_with` collapses concurrent identical
+            // misses into one upstream query (single-flight); the init closure
+            // runs once per miss, so we persist exactly one copy.
+            let data_owned = data.to_vec();
+            let upstream = state.upstream.clone();
+            let persist = state.persist.clone();
+            let pkey = key.clone();
+            let result = state
+                .cache
+                .try_get_with(key, async move {
+                    let resp = upstream.resolve(&data_owned).await?;
+                    let _ = persist.send((pkey, resp.clone()));
+                    Ok::<_, anyhow::Error>(resp)
+                })
+                .await;
+            match result {
+                Ok(cached) => {
+                    state.stats.forwarded.fetch_add(1, Relaxed);
+                    (patch_id(&cached.wire, id), "forwarded")
+                }
+                Err(e) => {
+                    state.stats.upstream_errors.fetch_add(1, Relaxed);
+                    tracing::debug!("upstream error: {e}");
+                    (build_response_code(&request, &query, ResponseCode::ServFail), "error")
+                }
+            }
+        }
     };
-    let id = request.metadata.id;
 
-    if let Some(cached) = state.cache.get(&key).await {
-        state.stats.cache_hits.fetch_add(1, Relaxed);
-        return Some(patch_id(&cached.wire, id));
+    if let Some(tx) = &state.qlog {
+        let client_str = if cfg.qlog.log_client_ip {
+            client.map(|ip| ip.to_string()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let _ = tx.send(LogRecord {
+            ts_ms: now_ms(),
+            client: client_str,
+            domain: name,
+            qtype: qtype.to_string(),
+            action,
+            latency_ms: start.elapsed().as_millis() as u32,
+        });
     }
 
-    // Miss: forward. `try_get_with` collapses concurrent identical misses into
-    // a single upstream query (single-flight) and does not cache errors. The
-    // init closure runs once per miss, so we persist exactly one copy.
-    let data_owned = data.to_vec();
-    let upstream = state.upstream.clone();
-    let persist = state.persist.clone();
-    let pkey = key.clone();
-    let result = state
-        .cache
-        .try_get_with(key, async move {
-            let resp = upstream.resolve(&data_owned).await?;
-            let _ = persist.send((pkey, resp.clone()));
-            Ok::<_, anyhow::Error>(resp)
-        })
-        .await;
-
-    match result {
-        Ok(cached) => {
-            state.stats.forwarded.fetch_add(1, Relaxed);
-            Some(patch_id(&cached.wire, id))
-        }
-        Err(e) => {
-            state.stats.upstream_errors.fetch_add(1, Relaxed);
-            tracing::debug!("upstream error: {e}");
-            Some(build_response_code(&request, &query, ResponseCode::ServFail))
-        }
-    }
+    Some(response)
 }
 
 /// Overwrite the 2-byte transaction id so a cached response matches this client.
@@ -179,7 +198,7 @@ async fn udp_worker(state: SharedState, sock: Arc<UdpSocket>) {
                 let state = state.clone();
                 let sock = sock.clone();
                 tokio::spawn(async move {
-                    if let Some(resp) = handle(&state, &data).await {
+                    if let Some(resp) = handle(&state, &data, Some(peer.ip())).await {
                         let _ = sock.send_to(&resp, peer).await;
                     }
                 });
@@ -195,10 +214,10 @@ pub async fn spawn_tcp(state: SharedState, addr: SocketAddr) -> Result<()> {
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
-                Ok((stream, _peer)) => {
+                Ok((stream, peer)) => {
                     let state = state.clone();
                     tokio::spawn(async move {
-                        let _ = tcp_conn(&state, stream).await;
+                        let _ = tcp_conn(&state, stream, peer.ip()).await;
                     });
                 }
                 Err(e) => tracing::warn!("TCP accept error: {e}"),
@@ -208,7 +227,7 @@ pub async fn spawn_tcp(state: SharedState, addr: SocketAddr) -> Result<()> {
     Ok(())
 }
 
-async fn tcp_conn(state: &AppState, mut stream: TcpStream) -> Result<()> {
+async fn tcp_conn(state: &AppState, mut stream: TcpStream, client: IpAddr) -> Result<()> {
     loop {
         let mut len_buf = [0u8; 2];
         if stream.read_exact(&mut len_buf).await.is_err() {
@@ -217,7 +236,7 @@ async fn tcp_conn(state: &AppState, mut stream: TcpStream) -> Result<()> {
         let len = u16::from_be_bytes(len_buf) as usize;
         let mut buf = vec![0u8; len];
         stream.read_exact(&mut buf).await?;
-        if let Some(resp) = handle(state, &buf).await {
+        if let Some(resp) = handle(state, &buf, Some(client)).await {
             let rlen = (resp.len() as u16).to_be_bytes();
             stream.write_all(&rlen).await?;
             stream.write_all(&resp).await?;

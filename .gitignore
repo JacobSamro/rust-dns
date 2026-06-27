@@ -4,5 +4,6 @@
 /blocklist.txt
 /cache.redb
 /cache.redb.lock
+/logs/
 *.log
 /cache.snapshot.json

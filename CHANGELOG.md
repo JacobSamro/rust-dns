@@ -6,6 +6,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Query logging to columnar Parquet (zstd), written off the DNS hot path by a
+  background batch writer with a configurable size cap (default 2 GB; oldest
+  segments drop first).
+- A Logs page in the portal and a `/api/logs` endpoint, backed by DataFusion
+  with a per-query memory ceiling. Filter by domain, client IP, and action.
+- `qlog` config section (`enabled`, `dir`, `max_bytes`, `flush_secs`,
+  `flush_rows`, `log_client_ip`, `mem_limit_mb`).
+
 ## [0.1.0] - 2026-06-27
 
 First working version: a blocking DNS resolver with a web admin portal.

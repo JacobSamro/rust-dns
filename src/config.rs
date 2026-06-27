@@ -11,6 +11,40 @@ pub struct Config {
     pub upstream: UpstreamConfig,
     pub cache: CacheConfig,
     pub web: WebConfig,
+    #[serde(default)]
+    pub qlog: QlogConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QlogConfig {
+    /// Turn query logging on/off.
+    pub enabled: bool,
+    /// Directory holding the Parquet log segments.
+    pub dir: String,
+    /// Hard size cap for the log directory (bytes). Oldest segments are dropped.
+    pub max_bytes: u64,
+    /// Flush a Parquet segment at least this often (seconds).
+    pub flush_secs: u64,
+    /// ...or once this many rows have buffered, whichever comes first.
+    pub flush_rows: usize,
+    /// Record the client IP. Turn off for privacy.
+    pub log_client_ip: bool,
+    /// Hard memory ceiling (MB) for a single query, enforced by DataFusion.
+    pub mem_limit_mb: u64,
+}
+
+impl Default for QlogConfig {
+    fn default() -> Self {
+        QlogConfig {
+            enabled: true,
+            dir: "logs".into(),
+            max_bytes: 2 * 1024 * 1024 * 1024, // 2 GB
+            flush_secs: 5,
+            flush_rows: 10_000,
+            log_client_ip: true,
+            mem_limit_mb: 128,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -99,6 +133,7 @@ impl Default for Config {
                 admin_token: "change-me".into(),
                 blocklist_path: "blocklist.txt".into(),
             },
+            qlog: QlogConfig::default(),
         }
     }
 }

@@ -4,6 +4,7 @@ mod blocklist;
 mod cache;
 mod config;
 mod dns;
+mod qlog;
 mod state;
 mod stats;
 mod upstream;
@@ -58,6 +59,16 @@ async fn main() -> Result<()> {
 
     let (persist_tx, persist_rx) = tokio::sync::mpsc::unbounded_channel();
 
+    // Query logging (Parquet + DataFusion), optional.
+    let qlog_tx = if cfg.qlog.enabled {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(qlog::run_writer(cfg.qlog.clone(), rx));
+        tracing::info!("query logging on -> {}", cfg.qlog.dir);
+        Some(tx)
+    } else {
+        None
+    };
+
     let upstream = Upstream::new(
         &cfg.upstream,
         cfg.upstream_addrs(),
@@ -71,6 +82,7 @@ async fn main() -> Result<()> {
         blocklist: ArcSwap::from_pointee(blocklist),
         cache: cache.clone(),
         persist: persist_tx,
+        qlog: qlog_tx,
         upstream,
         stats: Arc::new(Stats::default()),
         config_path,

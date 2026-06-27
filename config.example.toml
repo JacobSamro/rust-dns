@@ -34,6 +34,20 @@ min_ttl = 30
 max_ttl = 86400
 negative_ttl = 60
 
+[qlog]
+# Query logging to columnar Parquet, queried on demand with DataFusion.
+enabled = true
+dir = "logs"
+# Hard cap for the log directory; oldest segments are deleted past this.
+max_bytes = 2147483648   # 2 GB
+# Flush a segment at least this often, or once flush_rows have buffered.
+flush_secs = 5
+flush_rows = 10000
+# Record client IPs (set false for privacy).
+log_client_ip = true
+# Per-query memory ceiling for DataFusion (MB).
+mem_limit_mb = 128
+
 [web]
 bind = "0.0.0.0:8080"
 # CHANGE THIS. Sent as `Authorization: Bearer <token>`. Empty = no auth.

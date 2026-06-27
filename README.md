@@ -43,8 +43,11 @@ in an afternoon. Contributions are welcome — see [Contributing](#contributing)
   queries, and a token bucket caps queries per second.
 - Talks plain UDP/TCP to upstream, and retries over TCP when a reply comes back
   truncated.
+- Logs every query to columnar Parquet (off the hot path) and lets you search
+  it from the portal with DataFusion. Capped at a size you set; oldest segments
+  drop first.
 - Ships a web portal with token login, a stats dashboard, and screens for the
-  blocklist and upstreams.
+  blocklist, upstreams, and query logs.
 - Runs hot: multi-threaded Tokio, one `SO_REUSEPORT` socket per core, and
   lock-free reads on the query path (`arc-swap`, `moka`).
 
@@ -90,6 +93,8 @@ Open `http://<server>:8080` and sign in with the admin token from
 - **Upstream DNS** lets you add and remove resolvers one at a time
   (`host:port`, tried in order, changes apply live), and set the timeout, max
   QPS, and concurrency.
+- **Logs** shows recent queries newest-first, with filters for domain, client
+  IP, and action (blocked / cached / forwarded / error).
 - **Settings** holds the sinkhole mode and addresses, plus the read-only DNS and
   web bind addresses.
 
@@ -105,6 +110,7 @@ Everything under `/api` requires the token, sent as
 | POST | `/api/blocklist` | `{"text":"facebook.com\n*.example.com"}` — replaces the list, writes the file, hot-reloads |
 | GET  | `/api/config` | upstream + sinkhole view |
 | POST | `/api/config` | update upstream servers, timeout, qps, concurrency, sinkhole; persists to `config.toml` |
+| GET  | `/api/logs` | recent queries as JSON; filters: `domain`, `client`, `action`, `limit` |
 
 The portal manages domains and resolvers "one at a time" on the surface, but
 each add or remove just POSTs the whole list back; the server normalizes and
@@ -124,6 +130,11 @@ fields are saved to `config.toml` and take effect on the next restart.
 - `cache.flush_ms` — write-behind flush interval; lower loses fewer entries on
   a hard crash.
 - `cache.purge_interval_secs` — how often expired rows are deleted from the store.
+- `qlog.enabled` — turn query logging on/off.
+- `qlog.dir` / `qlog.max_bytes` — log directory and its hard size cap (default 2 GB).
+- `qlog.flush_secs` / `qlog.flush_rows` — how often a Parquet segment is written.
+- `qlog.log_client_ip` — set `false` to omit client IPs.
+- `qlog.mem_limit_mb` — per-query memory ceiling enforced by DataFusion.
 
 ## Deploy with systemd
 
@@ -163,7 +174,8 @@ into RAM for a warm cache.
 
 The source is small and split by concern: `dns.rs` (listeners + query pipeline),
 `blocklist.rs`, `cache.rs` (moka + redb), `upstream.rs` (forwarding + limits),
-`web.rs` + `web_assets/` (portal), and `config.rs`.
+`qlog.rs` (Parquet logging + DataFusion queries), `web.rs` + `web_assets/`
+(portal), and `config.rs`.
 
 ## Notes and tradeoffs
 

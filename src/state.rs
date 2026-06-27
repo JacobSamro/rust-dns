@@ -3,6 +3,7 @@
 use crate::blocklist::Blocklist;
 use crate::cache::{DnsCache, PersistTx};
 use crate::config::Config;
+use crate::qlog::LogTx;
 use crate::stats::Stats;
 use crate::upstream::Upstream;
 use arc_swap::ArcSwap;
@@ -15,6 +16,8 @@ pub struct AppState {
     pub cache: DnsCache,
     /// Write-behind channel to the redb durability store.
     pub persist: PersistTx,
+    /// Query-log channel (None when logging is disabled).
+    pub qlog: Option<LogTx>,
     pub upstream: Arc<Upstream>,
     pub stats: Arc<Stats>,
     pub config_path: PathBuf,

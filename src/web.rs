@@ -4,14 +4,15 @@
 use crate::blocklist::Blocklist;
 use crate::state::SharedState;
 use anyhow::Result;
-use axum::extract::{Request, State};
-use axum::http::{header::AUTHORIZATION, StatusCode};
+use axum::extract::{Query, Request, State};
+use axum::http::{header::AUTHORIZATION, header::CONTENT_TYPE, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 
 pub async fn serve(state: SharedState) -> Result<()> {
@@ -22,6 +23,7 @@ pub async fn serve(state: SharedState) -> Result<()> {
         .route("/api/blocklist", get(get_blocklist).post(set_blocklist))
         .route("/api/config", get(get_config).post(set_config))
         .route("/api/stats", get(get_stats))
+        .route("/api/logs", get(get_logs))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state);
 
@@ -121,6 +123,7 @@ struct ConfigView {
     sinkhole_ipv6: String,
     dns_bind: String,
     web_bind: String,
+    qlog_enabled: bool,
     note: String,
 }
 
@@ -136,6 +139,7 @@ async fn get_config(State(state): State<SharedState>) -> Json<ConfigView> {
         sinkhole_ipv6: cfg.dns.sinkhole_ipv6.to_string(),
         dns_bind: cfg.dns.bind.clone(),
         web_bind: cfg.web.bind.clone(),
+        qlog_enabled: cfg.qlog.enabled,
         note: "Upstream servers + sinkhole apply live. Other fields persist and take effect on restart.".into(),
     })
 }
@@ -189,6 +193,58 @@ async fn set_config(
 async fn get_stats(State(state): State<SharedState>) -> impl IntoResponse {
     let entries = state.cache.entry_count();
     Json(state.stats.snapshot(entries))
+}
+
+// ---- query log ----
+
+#[derive(Deserialize)]
+struct LogQuery {
+    limit: Option<usize>,
+    domain: Option<String>,
+    client: Option<String>,
+    action: Option<String>,
+}
+
+/// Escape a value for inlining into the generated SQL. The admin is already
+/// authenticated, but we still neutralize quotes / statement breaks.
+fn sql_escape(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, ';' | '\\'))
+        .collect::<String>()
+        .replace('\'', "''")
+}
+
+async fn get_logs(State(state): State<SharedState>, Query(q): Query<LogQuery>) -> Response {
+    let cfg = state.config.load();
+    if !cfg.qlog.enabled {
+        return ([(CONTENT_TYPE, "application/json")], "[]").into_response();
+    }
+
+    let mut clauses: Vec<String> = Vec::new();
+    if let Some(d) = q.domain.as_deref().filter(|s| !s.is_empty()) {
+        clauses.push(format!("domain LIKE '%{}%'", sql_escape(d)));
+    }
+    if let Some(c) = q.client.as_deref().filter(|s| !s.is_empty()) {
+        clauses.push(format!("client = '{}'", sql_escape(c)));
+    }
+    if let Some(a) = q.action.as_deref().filter(|s| !s.is_empty()) {
+        clauses.push(format!("action = '{}'", sql_escape(a)));
+    }
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", clauses.join(" AND "))
+    };
+    let limit = q.limit.unwrap_or(200).clamp(1, 5000);
+
+    match crate::qlog::query(Path::new(&cfg.qlog.dir), cfg.qlog.mem_limit_mb, &where_sql, limit).await
+    {
+        Ok(bytes) => ([(CONTENT_TYPE, "application/json")], bytes).into_response(),
+        Err(e) => {
+            tracing::warn!("log query failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response()
+        }
+    }
 }
 
 // ---- error helper ----
