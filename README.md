@@ -110,12 +110,6 @@ Do the same on the second server. To sync the blocklist, copy `blocklist.txt`
 over with `scp` or `rsync` and it reloads itself, or POST the list to that
 server's API.
 
-## Two servers, no coordination
-
-The two servers don't talk to each other. There's no shared database and nothing
-to keep in sync automatically. Each one is a single binary plus two text files
-(`config.toml`, `blocklist.txt`) and a cache snapshot it can rebuild on its own.
-If one box goes down, the other doesn't notice.
 
 ## Notes and tradeoffs
 
