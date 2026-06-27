@@ -1,0 +1,41 @@
+# Changelog
+
+All notable changes to rust-dns are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
+to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-06-27
+
+First working version: a blocking DNS resolver with a web admin portal.
+
+### Added
+
+- DNS resolver over UDP and TCP, built on Tokio. UDP uses `SO_REUSEPORT` with
+  one socket and receive loop per core so the kernel spreads load across CPUs.
+  TCP falls back automatically when a UDP reply comes back truncated.
+- Domain blocking. A plain entry (`facebook.com`) blocks the apex and every
+  subdomain; matching is one hash lookup per label.
+- Wildcard blocking. `*.example.com` blocks subdomains only, leaving the apex
+  `example.com` resolving.
+- In-RAM cache (`moka`) with per-entry TTL and single-flight, so a burst of
+  identical misses collapses into one upstream query.
+- Durable cache backing with embedded `redb`. New entries are batched to disk by
+  a write-behind task (off the query path), and reloaded into RAM on startup for
+  a warm cache. A background task purges expired rows to keep the file bounded.
+- Upstream forwarding to plain UDP/TCP resolvers, tried in order, with a
+  concurrency cap (semaphore) and a queries-per-second ceiling (token bucket) to
+  avoid overrunning the upstream.
+- Configurable sinkhole response: `zero_ip` (return `0.0.0.0` / `::`) or
+  `nxdomain`.
+- Web admin portal (axum) behind a shared admin token: token login, a live stats
+  dashboard, one-at-a-time management of blocked domains and upstream resolvers,
+  and sinkhole settings. JSON API under `/api`.
+- Hot reload of the blocklist and of upstream/sinkhole settings without a
+  restart.
+- Config from `config.toml` (created with defaults on first run), blocklist from
+  `blocklist.txt`.
+- systemd unit (`deploy/rust-dns.service`) that binds port 53 unprivileged via
+  `CAP_NET_BIND_SERVICE`.
+- Unit tests for blocklist matching (plain, wildcard, URL normalization).
