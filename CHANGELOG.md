@@ -6,6 +6,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Config loading no longer fails when the `[cache]` section omits the newer
+  `db_path`, `flush_ms`, or `purge_interval_secs` fields — they fall back to
+  defaults, so configs from before those fields existed keep working.
+
 ## [0.1.0] - 2026-06-27
 
 First release: a blocking DNS resolver with a web admin portal.

@@ -80,16 +80,29 @@ pub struct CacheConfig {
     /// Max number of in-RAM cached entries (bounds memory well under 1 GB).
     pub max_entries: u64,
     /// Path to the embedded redb durability store.
+    #[serde(default = "default_db_path")]
     pub db_path: String,
     /// Write-behind flush interval (ms). Lower = less loss on a hard crash.
+    #[serde(default = "default_flush_ms")]
     pub flush_ms: u64,
     /// How often (seconds) to purge expired rows from the store.
+    #[serde(default = "default_purge_interval_secs")]
     pub purge_interval_secs: u64,
     /// TTL floor/ceiling applied to upstream answers (seconds).
     pub min_ttl: u32,
     pub max_ttl: u32,
     /// TTL used for negative answers (NXDOMAIN / empty).
     pub negative_ttl: u32,
+}
+
+fn default_db_path() -> String {
+    "cache.redb".into()
+}
+fn default_flush_ms() -> u64 {
+    500
+}
+fn default_purge_interval_secs() -> u64 {
+    300
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
