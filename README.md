@@ -13,6 +13,8 @@ hot-reloads automatically.
 
 - **Blocking** — block a domain and all its subdomains (`facebook.com` also
   blocks `www.facebook.com`). Subdomain match is O(number of labels).
+  Wildcard entries (`*.example.com`) block subdomains only — the apex
+  `example.com` keeps resolving.
 - **In-RAM cache** with per-entry TTL, plus a disk snapshot for warm restarts
   (bounded well under 1 GB).
 - **Upstream protection** so you never overrun the resolver:

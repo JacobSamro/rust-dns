@@ -252,10 +252,10 @@
       <section class="page hidden" id="page-blocked">
         <div class="card">
           <div class="card-head"><div class="card-title">Add a domain to block</div>
-            <div class="card-desc">Blocking <span class="mono">facebook.com</span> also blocks <span class="mono">www.facebook.com</span> and every subdomain. Pasted URLs are cleaned automatically.</div></div>
+            <div class="card-desc"><span class="mono">facebook.com</span> blocks the apex and every subdomain. Use <span class="mono">*.example.com</span> to block subdomains only (the apex keeps resolving). Pasted URLs are cleaned automatically.</div></div>
           <div class="card-pad" style="padding-top:16px">
             <div class="addbar">
-              <input id="domainInput" class="input mono" placeholder="example.com" onkeydown="if(event.key==='Enter')addDomain()" />
+              <input id="domainInput" class="input mono" placeholder="example.com  or  *.example.com" onkeydown="if(event.key==='Enter')addDomain()" />
               <button class="btn btn-primary" onclick="addDomain()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add</button>
             </div>
@@ -354,6 +354,7 @@ const ICON = {
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>',
   globe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>',
   ban:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>',
+  asterisk:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v12"/><path d="M17.196 9 6.804 15"/><path d="m6.804 9 10.392 6"/></svg>',
 };
 
 function toast(msg, type="info"){
@@ -458,12 +459,15 @@ function renderDomains(){
   document.getElementById("navBlCount").textContent = domains.length;
   document.getElementById("domainCount").textContent = q ? `${shown.length} of ${domains.length} shown` : `${domains.length} domain${domains.length===1?'':'s'} blocked`;
   if(!shown.length){ list.innerHTML = `<div class="empty">${domains.length? 'No domains match your filter.' : 'No domains blocked yet. Add one above.'}</div>`; return; }
-  list.innerHTML = shown.map(d=>`
+  list.innerHTML = shown.map(d=>{
+    const wild = d.startsWith("*.");
+    return `
     <div class="list-row">
-      <span class="rico">${ICON.ban}</span>
+      <span class="rico">${wild?ICON.asterisk:ICON.ban}</span>
       <span class="val mono">${esc(d)}</span>
+      ${wild?'<span class="badge">subdomains only</span>':''}
       <button class="btn btn-destructive btn-icon" title="Remove" onclick="removeDomain('${esc(d)}')">${ICON.trash}</button>
-    </div>`).join("");
+    </div>`;}).join("");
 }
 async function addDomain(){
   const inp = document.getElementById("domainInput"); const v = inp.value.trim();
