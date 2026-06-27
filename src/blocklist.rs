@@ -121,6 +121,16 @@ fn normalize(raw: &str) -> String {
     d.trim_end_matches('.').trim().to_string()
 }
 
+const DEFAULT_BLOCKLIST: &str = "\
+# rust-dns blocklist — one domain per line.
+# A plain domain blocks the apex and all subdomains:
+#   facebook.com   -> blocks facebook.com, www.facebook.com, m.facebook.com, …
+# A wildcard blocks subdomains only (apex still resolves):
+#   *.example.com  -> blocks www.example.com but NOT example.com
+# Lines starting with # are comments.
+facebook.com
+";
+
 #[cfg(test)]
 mod tests {
     use super::Blocklist;
@@ -161,13 +171,3 @@ mod tests {
         assert_eq!(bl.len(), 2);
     }
 }
-
-const DEFAULT_BLOCKLIST: &str = "\
-# rust-dns blocklist — one domain per line.
-# A plain domain blocks the apex and all subdomains:
-#   facebook.com   -> blocks facebook.com, www.facebook.com, m.facebook.com, …
-# A wildcard blocks subdomains only (apex still resolves):
-#   *.example.com  -> blocks www.example.com but NOT example.com
-# Lines starting with # are comments.
-facebook.com
-";

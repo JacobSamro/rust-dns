@@ -69,7 +69,10 @@ pub async fn handle(state: &AppState, data: &[u8], client: Option<IpAddr>) -> Op
                 Err(e) => {
                     state.stats.upstream_errors.fetch_add(1, Relaxed);
                     tracing::debug!("upstream error: {e}");
-                    (build_response_code(&request, &query, ResponseCode::ServFail), "error")
+                    (
+                        build_response_code(&request, &query, ResponseCode::ServFail),
+                        "error",
+                    )
                 }
             }
         }

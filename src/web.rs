@@ -237,7 +237,13 @@ async fn get_logs(State(state): State<SharedState>, Query(q): Query<LogQuery>) -
     };
     let limit = q.limit.unwrap_or(200).clamp(1, 5000);
 
-    match crate::qlog::query(Path::new(&cfg.qlog.dir), cfg.qlog.mem_limit_mb, &where_sql, limit).await
+    match crate::qlog::query(
+        Path::new(&cfg.qlog.dir),
+        cfg.qlog.mem_limit_mb,
+        &where_sql,
+        limit,
+    )
+    .await
     {
         Ok(bytes) => ([(CONTENT_TYPE, "application/json")], bytes).into_response(),
         Err(e) => {

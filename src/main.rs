@@ -89,7 +89,11 @@ async fn main() -> Result<()> {
     });
 
     // Write-behind persister.
-    tokio::spawn(cache::run_writer(store.clone(), persist_rx, cfg.cache.flush_ms));
+    tokio::spawn(cache::run_writer(
+        store.clone(),
+        persist_rx,
+        cfg.cache.flush_ms,
+    ));
 
     let dns_addr: SocketAddr = cfg
         .dns

@@ -1,8 +1,10 @@
 //! Upstream forwarding with three layers of protection against overrunning the
 //! upstream resolver:
-//!   1. single-flight (handled by the cache's `try_get_with`)
-//!   2. a concurrency cap (semaphore) to bound bursts
-//!   3. a hard QPS ceiling (governor rate limiter)
+//!
+//! 1. single-flight (handled by the cache's `try_get_with`)
+//! 2. a concurrency cap (semaphore) to bound bursts
+//! 3. a hard QPS ceiling (governor rate limiter)
+//!
 //! Responses are forwarded over UDP, with TCP fallback when truncated.
 
 use crate::cache::{now_unix, CachedResponse};
@@ -31,7 +33,13 @@ pub struct Upstream {
 }
 
 impl Upstream {
-    pub fn new(cfg: &UpstreamConfig, servers: Vec<SocketAddr>, min_ttl: u32, max_ttl: u32, negative_ttl: u32) -> Arc<Upstream> {
+    pub fn new(
+        cfg: &UpstreamConfig,
+        servers: Vec<SocketAddr>,
+        min_ttl: u32,
+        max_ttl: u32,
+        negative_ttl: u32,
+    ) -> Arc<Upstream> {
         let qps = NonZeroU32::new(cfg.max_qps.max(1)).unwrap();
         Arc::new(Upstream {
             servers: ArcSwap::from_pointee(servers),
@@ -70,7 +78,11 @@ impl Upstream {
     }
 
     async fn query_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>> {
-        let bind = if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+        let bind = if server.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        };
         let sock = UdpSocket::bind(bind).await?;
         sock.connect(server).await?;
         sock.send(query).await?;

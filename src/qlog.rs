@@ -49,7 +49,11 @@ pub fn now_ms() -> i64 {
 
 fn schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
-        Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, None), false),
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        ),
         Field::new("client", DataType::Utf8, true),
         Field::new("domain", DataType::Utf8, false),
         Field::new("qtype", DataType::Utf8, false),
@@ -183,7 +187,12 @@ fn enforce_retention(dir: &Path, max_bytes: u64) -> Result<()> {
 
 /// Run a filtered query and return the rows as a JSON array (bytes).
 /// `where_sql` is a complete `WHERE ...` clause (or empty).
-pub async fn query(dir: &Path, mem_limit_mb: u64, where_sql: &str, limit: usize) -> Result<Vec<u8>> {
+pub async fn query(
+    dir: &Path,
+    mem_limit_mb: u64,
+    where_sql: &str,
+    limit: usize,
+) -> Result<Vec<u8>> {
     if !has_segments(dir) {
         return Ok(b"[]".to_vec());
     }
@@ -193,8 +202,12 @@ pub async fn query(dir: &Path, mem_limit_mb: u64, where_sql: &str, limit: usize)
         .with_memory_pool(Arc::new(GreedyMemoryPool::new(bytes)))
         .build_arc()?;
     let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), rt);
-    ctx.register_parquet("logs", dir.to_string_lossy().as_ref(), ParquetReadOptions::default())
-        .await?;
+    ctx.register_parquet(
+        "logs",
+        dir.to_string_lossy().as_ref(),
+        ParquetReadOptions::default(),
+    )
+    .await?;
 
     let sql = format!(
         "SELECT CAST(ts AS VARCHAR) AS ts, client, domain, qtype, action, latency_ms \
@@ -214,8 +227,12 @@ fn has_segments(dir: &Path) -> bool {
     std::fs::read_dir(dir)
         .ok()
         .map(|it| {
-            it.filter_map(|e| e.ok())
-                .any(|e| e.path().extension().map(|x| x == "parquet").unwrap_or(false))
+            it.filter_map(|e| e.ok()).any(|e| {
+                e.path()
+                    .extension()
+                    .map(|x| x == "parquet")
+                    .unwrap_or(false)
+            })
         })
         .unwrap_or(false)
 }
