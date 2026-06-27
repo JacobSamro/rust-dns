@@ -11,8 +11,8 @@ from a built-in web portal.
   block `www.facebook.com` and the rest; matching costs one hash lookup per
   label. Wildcards work too: `*.example.com` blocks subdomains while the apex
   `example.com` keeps resolving.
-- Caches answers in RAM with a per-entry TTL, and snapshots the cache to disk so
-  a restart comes back warm. It stays well under 1 GB.
+- Caches answers in RAM with a per-entry TTL, backed by an embedded `redb`
+  store so a restart comes back warm. The in-RAM cache stays well under 1 GB.
 - Doesn't hammer your upstream. Three things hold it back: identical concurrent
   misses collapse into one query (single-flight), a semaphore caps in-flight
   queries, and a token bucket caps queries per second.
@@ -90,14 +90,16 @@ fields are saved to `config.toml` and take effect on the next restart.
 - `dns.workers` — `0` means one `SO_REUSEPORT` socket per core.
 - `upstream.servers` — plain `host:port` resolvers, tried in order.
 - `upstream.max_qps` / `max_concurrent` — the upstream rate and burst limits.
-- `cache.max_entries` — caps memory and snapshot size (500k is roughly 150 MB).
-- `cache.snapshot_*` — warm-restart persistence.
+- `cache.max_entries` — caps in-RAM memory (500k is roughly 150 MB).
+- `cache.db_path` — the embedded redb file used for durability.
+- `cache.flush_ms` — write-behind flush interval; lower loses fewer entries on
+  a hard crash.
+- `cache.purge_interval_secs` — how often expired rows are deleted from the store.
 
 ## Deploy (systemd)
 
 `deploy/rust-dns.service` runs the binary unprivileged but still binds port 53
-through `CAP_NET_BIND_SERVICE`, and sends `SIGINT` on stop so the cache snapshot
-flushes first.
+through `CAP_NET_BIND_SERVICE`.
 
 ```sh
 sudo mkdir -p /opt/rust-dns
@@ -119,3 +121,8 @@ server's API.
 - TTL comes from the smallest answer TTL (negative answers use `negative_ttl`),
   clamped to `[min_ttl, max_ttl]`. Entries serve until they expire, with no
   per-second TTL countdown. For the short TTLs you see internally, that's fine.
+- Durability is write-behind: new entries are batched to redb every `flush_ms`
+  (default 500 ms) on a background thread, so the query path never waits on disk.
+  A hard crash can lose up to that window of new entries, which a cache simply
+  re-fetches from upstream. Reads always come from RAM; redb is only the backing
+  store, loaded into the cache on startup.

@@ -47,12 +47,19 @@ pub async fn handle(state: &AppState, data: &[u8]) -> Option<Vec<u8>> {
     }
 
     // Miss: forward. `try_get_with` collapses concurrent identical misses into
-    // a single upstream query (single-flight) and does not cache errors.
+    // a single upstream query (single-flight) and does not cache errors. The
+    // init closure runs once per miss, so we persist exactly one copy.
     let data_owned = data.to_vec();
     let upstream = state.upstream.clone();
+    let persist = state.persist.clone();
+    let pkey = key.clone();
     let result = state
         .cache
-        .try_get_with(key, async move { upstream.resolve(&data_owned).await })
+        .try_get_with(key, async move {
+            let resp = upstream.resolve(&data_owned).await?;
+            let _ = persist.send((pkey, resp.clone()));
+            Ok::<_, anyhow::Error>(resp)
+        })
         .await;
 
     match result {

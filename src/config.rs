@@ -43,12 +43,14 @@ pub struct UpstreamConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CacheConfig {
-    /// Max number of cached entries (bounds memory + snapshot size well under 1 GB).
+    /// Max number of in-RAM cached entries (bounds memory well under 1 GB).
     pub max_entries: u64,
-    /// Where the warm-start snapshot is written.
-    pub snapshot_path: String,
-    /// How often (seconds) to write the snapshot.
-    pub snapshot_interval_secs: u64,
+    /// Path to the embedded redb durability store.
+    pub db_path: String,
+    /// Write-behind flush interval (ms). Lower = less loss on a hard crash.
+    pub flush_ms: u64,
+    /// How often (seconds) to purge expired rows from the store.
+    pub purge_interval_secs: u64,
     /// TTL floor/ceiling applied to upstream answers (seconds).
     pub min_ttl: u32,
     pub max_ttl: u32,
@@ -85,8 +87,9 @@ impl Default for Config {
             },
             cache: CacheConfig {
                 max_entries: 500_000,
-                snapshot_path: "cache.snapshot.json".into(),
-                snapshot_interval_secs: 60,
+                db_path: "cache.redb".into(),
+                flush_ms: 500,
+                purge_interval_secs: 300,
                 min_ttl: 30,
                 max_ttl: 86_400,
                 negative_ttl: 60,

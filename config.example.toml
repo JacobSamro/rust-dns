@@ -22,10 +22,14 @@ max_concurrent = 256
 max_qps = 2000
 
 [cache]
-# Entry cap bounds memory + snapshot size (well under 1 GB; ~150 MB at 500k).
+# In-RAM entry cap (bounds memory well under 1 GB; ~150 MB at 500k).
 max_entries = 500000
-snapshot_path = "cache.snapshot.json"
-snapshot_interval_secs = 60
+# Embedded redb store used for durability + warm restarts.
+db_path = "cache.redb"
+# Write-behind flush interval (ms). Lower loses fewer entries on a hard crash.
+flush_ms = 500
+# How often (seconds) to delete expired rows from the store.
+purge_interval_secs = 300
 min_ttl = 30
 max_ttl = 86400
 negative_ttl = 60

@@ -2,6 +2,6 @@
 # Runtime state (per-server, not committed)
 /config.toml
 /blocklist.txt
-/cache.snapshot.json
-/cache.snapshot.tmp
+/cache.redb
+/cache.redb.lock
 *.log

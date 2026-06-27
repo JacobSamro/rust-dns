@@ -42,7 +42,21 @@ async fn main() -> Result<()> {
     tracing::info!("loaded {} blocked domains", blocklist.len());
 
     let cache = cache::build(&cfg.cache);
-    cache::load_snapshot(&cache, Path::new(&cfg.cache.snapshot_path)).await;
+
+    // Durable backing store (redb) + warm load into RAM.
+    let store = Arc::new(cache::Store::open(Path::new(&cfg.cache.db_path))?);
+    match store.read_all_valid() {
+        Ok(entries) => {
+            let n = entries.len();
+            for (k, v) in entries {
+                cache.insert(k, Arc::new(v)).await;
+            }
+            tracing::info!("loaded {n} cache entries from {}", cfg.cache.db_path);
+        }
+        Err(e) => tracing::warn!("could not load cache store: {e}"),
+    }
+
+    let (persist_tx, persist_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let upstream = Upstream::new(
         &cfg.upstream,
@@ -56,10 +70,14 @@ async fn main() -> Result<()> {
         config: ArcSwap::from_pointee(cfg.clone()),
         blocklist: ArcSwap::from_pointee(blocklist),
         cache: cache.clone(),
+        persist: persist_tx,
         upstream,
         stats: Arc::new(Stats::default()),
         config_path,
     });
+
+    // Write-behind persister.
+    tokio::spawn(cache::run_writer(store.clone(), persist_rx, cfg.cache.flush_ms));
 
     let dns_addr: SocketAddr = cfg
         .dns
@@ -69,19 +87,20 @@ async fn main() -> Result<()> {
     dns::spawn_udp(state.clone(), dns_addr, cfg.dns.workers)?;
     dns::spawn_tcp(state.clone(), dns_addr).await?;
 
-    // Periodic cache snapshot for warm restarts.
+    // Periodically purge expired rows from the store so it stays bounded.
     {
-        let snap_state = state.clone();
-        let interval = cfg.cache.snapshot_interval_secs.max(5);
-        let snap_path = cfg.cache.snapshot_path.clone();
+        let purge_store = store.clone();
+        let interval = cfg.cache.purge_interval_secs.max(30);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(interval));
             tick.tick().await; // skip immediate first tick
             loop {
                 tick.tick().await;
-                match cache::save_snapshot(&snap_state.cache, Path::new(&snap_path)) {
-                    Ok(n) => tracing::debug!("cache snapshot: {n} entries"),
-                    Err(e) => tracing::warn!("cache snapshot failed: {e}"),
+                let s = purge_store.clone();
+                match tokio::task::spawn_blocking(move || s.purge_expired()).await {
+                    Ok(Ok(n)) if n > 0 => tracing::debug!("purged {n} expired entries"),
+                    Ok(Err(e)) => tracing::warn!("purge failed: {e}"),
+                    _ => {}
                 }
             }
         });
@@ -99,11 +118,8 @@ async fn main() -> Result<()> {
 
     tracing::info!("rust-dns ready");
     tokio::signal::ctrl_c().await?;
-    tracing::info!("shutting down, saving cache snapshot");
-
-    let snap_path = state.config.load().cache.snapshot_path.clone();
-    if let Err(e) = cache::save_snapshot(&state.cache, Path::new(&snap_path)) {
-        tracing::warn!("final snapshot failed: {e}");
-    }
+    tracing::info!("shutting down");
+    // The write-behind persister flushes on its interval; entries from the last
+    // sub-second window may not be on disk, which is fine for a cache.
     Ok(())
 }
