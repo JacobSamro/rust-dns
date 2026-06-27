@@ -2,6 +2,11 @@
 name = "rust-dns"
 version = "0.1.0"
 edition = "2021"
+description = "A small, fast blocking DNS resolver with a web admin portal"
+license = "MIT"
+readme = "README.md"
+keywords = ["dns", "resolver", "adblock", "blocklist", "cache"]
+categories = ["network-programming", "caching"]
 
 [dependencies]
 anyhow = "1"

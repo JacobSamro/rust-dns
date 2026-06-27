@@ -5,7 +5,32 @@ it: blocked names get a dummy answer (`0.0.0.0`/`::` or `NXDOMAIN`), and
 everything else is forwarded to an upstream resolver and cached. You manage it
 from a built-in web portal.
 
-## What it does
+![status](https://img.shields.io/badge/status-alpha-orange)
+![built with Rust](https://img.shields.io/badge/built%20with-Rust-CE412B?logo=rust&logoColor=white)
+![license](https://img.shields.io/badge/license-MIT-blue)
+![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
+
+It's meant to be boring in the good way: a single static binary plus two text
+files, fast enough to sit in front of a whole network, and simple enough to read
+in an afternoon. Contributions are welcome — see [Contributing](#contributing).
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [The portal](#the-portal)
+- [HTTP API](#http-api)
+- [Configuration](#configuration)
+- [Deploy with systemd](#deploy-with-systemd)
+- [How it works](#how-it-works)
+- [Notes and tradeoffs](#notes-and-tradeoffs)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
+
+## Features
 
 - Blocks a domain and all its subdomains. Block `facebook.com` and you also
   block `www.facebook.com` and the rest; matching costs one hash lookup per
@@ -23,24 +48,27 @@ from a built-in web portal.
 - Runs hot: multi-threaded Tokio, one `SO_REUSEPORT` socket per core, and
   lock-free reads on the query path (`arc-swap`, `moka`).
 
-## Build
+## Requirements
+
+- A stable Rust toolchain (2021 edition). Install via [rustup](https://rustup.rs).
+- Linux for the production features (`SO_REUSEPORT`, the systemd unit). macOS
+  works fine for development.
+- Binding port 53 needs root or `CAP_NET_BIND_SERVICE`. For local testing, bind
+  a high port instead (see below).
+
+## Quick start
 
 ```sh
-cargo build --release
-# binary: target/release/rust-dns
-```
-
-## Run
-
-```sh
+git clone <your-fork-url> rust-dns && cd rust-dns
+cargo build --release            # binary: target/release/rust-dns
 cp config.example.toml config.toml   # then edit admin_token, upstream, etc.
-sudo ./target/release/rust-dns config.toml   # port 53 needs privilege
+sudo ./target/release/rust-dns config.toml
 ```
 
 Config path resolution: `argv[1]`, then `$RUST_DNS_CONFIG`, then `./config.toml`.
 A missing `config.toml` or `blocklist.txt` is created with defaults on first run.
 
-To test without root, set `dns.bind = "127.0.0.1:5353"`:
+To try it without root, set `dns.bind = "127.0.0.1:5353"` and query it:
 
 ```sh
 dig @127.0.0.1 -p 5353 facebook.com   # -> 0.0.0.0 (blocked)
@@ -65,8 +93,9 @@ Open `http://<server>:8080` and sign in with the admin token from
 - **Settings** holds the sinkhole mode and addresses, plus the read-only DNS and
   web bind addresses.
 
-### API (under `/api`, token required)
+## HTTP API
 
+Everything under `/api` requires the token, sent as
 `Authorization: Bearer <token>` (or an `X-Admin-Token:` header, or `?token=`).
 
 | Method | Path | Body / Notes |
@@ -96,7 +125,7 @@ fields are saved to `config.toml` and take effect on the next restart.
   a hard crash.
 - `cache.purge_interval_secs` — how often expired rows are deleted from the store.
 
-## Deploy (systemd)
+## Deploy with systemd
 
 `deploy/rust-dns.service` runs the binary unprivileged but still binds port 53
 through `CAP_NET_BIND_SERVICE`.
@@ -108,10 +137,33 @@ sudo cp deploy/rust-dns.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now rust-dns
 ```
 
-Do the same on the second server. To sync the blocklist, copy `blocklist.txt`
-over with `scp` or `rsync` and it reloads itself, or POST the list to that
-server's API.
+Run it on as many boxes as you like. To sync a blocklist between them, copy
+`blocklist.txt` over with `scp` or `rsync` and it reloads itself, or POST the
+list to that server's API.
 
+## How it works
+
+A query takes one path: parse, check the blocklist, check the RAM cache, and
+only forward to upstream on a miss.
+
+```
+UDP/TCP :53  ->  parse  ->  blocked?  --yes-->  sinkhole answer
+                              | no
+                              v
+                         cache hit?  --yes-->  serve from RAM
+                              | no
+                              v
+                   forward upstream (single-flight + rate limit)  ->  cache + serve
+```
+
+The cache is `moka` in RAM for lookups, with an embedded `redb` store behind it
+for durability. New entries stream to a write-behind task that batches them into
+redb transactions off the query path, and on startup the store is loaded back
+into RAM for a warm cache.
+
+The source is small and split by concern: `dns.rs` (listeners + query pipeline),
+`blocklist.rs`, `cache.rs` (moka + redb), `upstream.rs` (forwarding + limits),
+`web.rs` + `web_assets/` (portal), and `config.rs`.
 
 ## Notes and tradeoffs
 
@@ -126,3 +178,41 @@ server's API.
   A hard crash can lose up to that window of new entries, which a cache simply
   re-fetches from upstream. Reads always come from RAM; redb is only the backing
   store, loaded into the cache on startup.
+
+## Roadmap
+
+Rough, unordered, and open to discussion in an issue:
+
+- Encrypted upstream (DoH / DoT).
+- A Prometheus `/metrics` endpoint.
+- Per-second TTL countdown on cached answers.
+- Optional allowlist / per-client rules.
+
+## Contributing
+
+Issues and pull requests are welcome. To get going:
+
+```sh
+cargo build           # debug build
+cargo test            # run the tests
+cargo fmt             # format
+cargo clippy          # lint
+```
+
+A few asks: keep changes focused, run `cargo fmt` and `cargo clippy` before
+opening a PR, and add a test when you fix a bug or add behavior. If you're
+planning something larger, open an issue first so we can talk it through.
+
+## License
+
+Released under the [MIT License](LICENSE). Unless you state otherwise, any
+contribution you submit is licensed the same way.
+
+## Acknowledgements
+
+Built on the work of others: [Tokio](https://tokio.rs),
+[hickory-dns](https://github.com/hickory-dns/hickory-dns) (DNS wire format),
+[moka](https://github.com/moka-rs/moka) (cache),
+[redb](https://github.com/cberner/redb) (storage),
+[axum](https://github.com/tokio-rs/axum) (web), and
+[governor](https://github.com/boinkor-net/governor) (rate limiting).
