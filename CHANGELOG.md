@@ -6,24 +6,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- Query logging to columnar Parquet (zstd), written off the DNS hot path by a
-  background batch writer with a configurable size cap (default 2 GB; oldest
-  segments drop first).
-- A Logs page in the portal and a `/api/logs` endpoint, backed by DataFusion
-  with a per-query memory ceiling. Filter by domain, client IP, and action.
-- `qlog` config section (`enabled`, `dir`, `max_bytes`, `flush_secs`,
-  `flush_rows`, `log_client_ip`, `mem_limit_mb`).
-- End-to-end test (`tests/e2e.rs`) that boots the real binary against a local
-  stub upstream and checks blocking, wildcards, caching, auth, live blocklist
-  edits, and query logging.
-- GitHub Actions CI (fmt, clippy, build, test on Ubuntu) and a tag-triggered
-  release workflow that publishes an `x86_64-unknown-linux-gnu` build.
-
 ## [0.1.0] - 2026-06-27
 
-First working version: a blocking DNS resolver with a web admin portal.
+First release: a blocking DNS resolver with a web admin portal.
 
 ### Added
 
@@ -53,4 +38,13 @@ First working version: a blocking DNS resolver with a web admin portal.
   `blocklist.txt`.
 - systemd unit (`deploy/rust-dns.service`) that binds port 53 unprivileged via
   `CAP_NET_BIND_SERVICE`.
-- Unit tests for blocklist matching (plain, wildcard, URL normalization).
+- Query logging to columnar Parquet (zstd), written off the DNS hot path by a
+  background batch writer with a configurable size cap (default 2 GB; oldest
+  segments drop first). A Logs page in the portal and a `/api/logs` endpoint,
+  backed by DataFusion with a per-query memory ceiling; filter by domain, client
+  IP, and action.
+- Unit tests for blocklist matching, plus an end-to-end test (`tests/e2e.rs`)
+  that boots the real binary against a local stub upstream and checks blocking,
+  wildcards, caching, auth, live blocklist edits, and query logging.
+- GitHub Actions CI (fmt, clippy, build, test on Ubuntu) and a tag-triggered
+  release workflow that publishes an `x86_64-unknown-linux-gnu` build.
