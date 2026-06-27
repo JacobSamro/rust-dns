@@ -1,30 +1,27 @@
 # rust-dns
 
-A small, high-performance **blocking DNS resolver** in Rust. Point your routers
-at it; queries for blocked domains get a dummy answer (`0.0.0.0`/`::` or
-`NXDOMAIN`), everything else is forwarded to an upstream resolver and cached.
-Manage the blocklist and upstream from a built-in web UI.
+A small, fast DNS resolver in Rust that blocks domains. Point your routers at
+it: blocked names get a dummy answer (`0.0.0.0`/`::` or `NXDOMAIN`), and
+everything else is forwarded to an upstream resolver and cached. You manage it
+from a built-in web portal.
 
-Built for two independent, standalone servers — each runs the full binary and is
-managed on its own. To replicate, copy `blocklist.txt` to the other box; it
-hot-reloads automatically.
+## What it does
 
-## Features
-
-- **Blocking** — block a domain and all its subdomains (`facebook.com` also
-  blocks `www.facebook.com`). Subdomain match is O(number of labels).
-  Wildcard entries (`*.example.com`) block subdomains only — the apex
+- Blocks a domain and all its subdomains. Block `facebook.com` and you also
+  block `www.facebook.com` and the rest; matching costs one hash lookup per
+  label. Wildcards work too: `*.example.com` blocks subdomains while the apex
   `example.com` keeps resolving.
-- **In-RAM cache** with per-entry TTL, plus a disk snapshot for warm restarts
-  (bounded well under 1 GB).
-- **Upstream protection** so you never overrun the resolver:
-  1. **single-flight** — concurrent identical misses collapse to one query,
-  2. **concurrency cap** (semaphore),
-  3. **hard QPS ceiling** (token bucket).
-- **Plain UDP/TCP** upstream, with automatic TCP fallback on truncated answers.
-- **Web admin UI** (single page) + JSON API, behind a shared admin token.
-- **High throughput** — multi-threaded Tokio, `SO_REUSEPORT` sockets (one
-  receive loop per core), lock-free reads on the hot path (`arc-swap`, `moka`).
+- Caches answers in RAM with a per-entry TTL, and snapshots the cache to disk so
+  a restart comes back warm. It stays well under 1 GB.
+- Doesn't hammer your upstream. Three things hold it back: identical concurrent
+  misses collapse into one query (single-flight), a semaphore caps in-flight
+  queries, and a token bucket caps queries per second.
+- Talks plain UDP/TCP to upstream, and retries over TCP when a reply comes back
+  truncated.
+- Ships a web portal with token login, a stats dashboard, and screens for the
+  blocklist and upstreams.
+- Runs hot: multi-threaded Tokio, one `SO_REUSEPORT` socket per core, and
+  lock-free reads on the query path (`arc-swap`, `moka`).
 
 ## Build
 
@@ -40,52 +37,67 @@ cp config.example.toml config.toml   # then edit admin_token, upstream, etc.
 sudo ./target/release/rust-dns config.toml   # port 53 needs privilege
 ```
 
-Config path resolution: `argv[1]` → `$RUST_DNS_CONFIG` → `./config.toml`.
-A missing `config.toml`/`blocklist.txt` is created with defaults on first run.
+Config path resolution: `argv[1]`, then `$RUST_DNS_CONFIG`, then `./config.toml`.
+A missing `config.toml` or `blocklist.txt` is created with defaults on first run.
 
-For local testing without root, set `dns.bind = "127.0.0.1:5353"`:
+To test without root, set `dns.bind = "127.0.0.1:5353"`:
 
 ```sh
 dig @127.0.0.1 -p 5353 facebook.com   # -> 0.0.0.0 (blocked)
 dig @127.0.0.1 -p 5353 example.com    # -> forwarded + cached
 ```
 
-## Web UI
+## The portal
 
-Open `http://<server>:8080`, enter the admin token (from `config.toml`), and you
-can edit the blocklist and the upstream/sinkhole settings live.
+Open `http://<server>:8080` and sign in with the admin token from
+`config.toml`. The sidebar has four screens:
 
-### API (all under `/api`, require the token)
+- **Dashboard** shows live counters (queries, blocked, cache hit rate,
+  forwarded, cache entries, upstream errors, uptime) and refreshes every few
+  seconds.
+- **Blocked Domains** lets you add one domain at a time. Each domain gets its own
+  row with a remove button, and there's a filter box for long lists. Wildcard
+  rows are tagged "subdomains only". Pasted URLs are cleaned, so
+  `https://www.youtube.com/watch?v=1` becomes `www.youtube.com`.
+- **Upstream DNS** lets you add and remove resolvers one at a time
+  (`host:port`, tried in order, changes apply live), and set the timeout, max
+  QPS, and concurrency.
+- **Settings** holds the sinkhole mode and addresses, plus the read-only DNS and
+  web bind addresses.
 
-`Authorization: Bearer <token>` (or `X-Admin-Token:` header, or `?token=`).
+### API (under `/api`, token required)
+
+`Authorization: Bearer <token>` (or an `X-Admin-Token:` header, or `?token=`).
 
 | Method | Path | Body / Notes |
 |---|---|---|
-| GET  | `/api/stats` | counters + cache hit-rate |
+| GET  | `/api/stats` | counters + cache hit rate |
 | GET  | `/api/blocklist` | `{count, domains[]}` |
-| POST | `/api/blocklist` | `{"text":"facebook.com\ntiktok.com"}` — replaces the list, writes the file, hot-reloads |
+| POST | `/api/blocklist` | `{"text":"facebook.com\n*.example.com"}` — replaces the list, writes the file, hot-reloads |
 | GET  | `/api/config` | upstream + sinkhole view |
 | POST | `/api/config` | update upstream servers, timeout, qps, concurrency, sinkhole; persists to `config.toml` |
 
-Upstream-server and sinkhole changes apply live. The other tuning fields persist
-and take effect on the next restart.
+The portal manages domains and resolvers "one at a time" on the surface, but
+each add or remove just POSTs the whole list back; the server normalizes and
+dedupes it. Upstream servers and sinkhole settings apply live. The other tuning
+fields are saved to `config.toml` and take effect on the next restart.
 
 ## Configuration
 
-See `config.example.toml` for every field. Key ones:
+`config.example.toml` lists every field. The ones you'll touch most:
 
 - `dns.sinkhole_mode` — `"zero_ip"` (return `sinkhole_ipv4`/`ipv6`) or `"nxdomain"`.
-- `dns.workers` — `0` = one `SO_REUSEPORT` socket per core.
+- `dns.workers` — `0` means one `SO_REUSEPORT` socket per core.
 - `upstream.servers` — plain `host:port` resolvers, tried in order.
-- `upstream.max_qps` / `max_concurrent` — upstream rate/burst limits.
-- `cache.max_entries` — caps memory and snapshot size (500k ≈ ~150 MB).
+- `upstream.max_qps` / `max_concurrent` — the upstream rate and burst limits.
+- `cache.max_entries` — caps memory and snapshot size (500k is roughly 150 MB).
 - `cache.snapshot_*` — warm-restart persistence.
 
 ## Deploy (systemd)
 
-`deploy/rust-dns.service` runs the binary unprivileged while still binding port
-53 via `CAP_NET_BIND_SERVICE`, and sends `SIGINT` on stop so the cache snapshot
-flushes.
+`deploy/rust-dns.service` runs the binary unprivileged but still binds port 53
+through `CAP_NET_BIND_SERVICE`, and sends `SIGINT` on stop so the cache snapshot
+flushes first.
 
 ```sh
 sudo mkdir -p /opt/rust-dns
@@ -94,21 +106,22 @@ sudo cp deploy/rust-dns.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now rust-dns
 ```
 
-Repeat on the second server. To sync the blocklist, copy `blocklist.txt` over
-(`scp`/`rsync`) — it reloads on its own, or POST the list to that server's API.
+Do the same on the second server. To sync the blocklist, copy `blocklist.txt`
+over with `scp` or `rsync` and it reloads itself, or POST the list to that
+server's API.
 
-## Two-server note
+## Two servers, no coordination
 
-The servers are deliberately independent — no shared database, no coordination.
-Each is a single static binary plus two text files (`config.toml`,
-`blocklist.txt`) and a regenerable `cache.snapshot.json`. That keeps each router
-DNS fully self-contained: if one box is down, the other is unaffected.
+The two servers don't talk to each other. There's no shared database and nothing
+to keep in sync automatically. Each one is a single binary plus two text files
+(`config.toml`, `blocklist.txt`) and a cache snapshot it can rebuild on its own.
+If one box goes down, the other doesn't notice.
 
-## Design / tradeoffs
+## Notes and tradeoffs
 
-- Cached responses store the upstream wire bytes; the transaction ID is patched
-  per client on serve. The first requester's EDNS options are baked into the
-  cached entry — fine for a homogeneous internal fleet.
-- TTL is taken from the minimum answer TTL (negative answers use `negative_ttl`),
-  clamped to `[min_ttl, max_ttl]`. Entries serve until expiry without per-second
-  TTL decrement — acceptable for short internal TTLs.
+- Cached responses store the raw upstream bytes; the transaction ID is patched
+  per client when served. That means the first requester's EDNS options get
+  baked into the cached entry, which is fine for a uniform internal fleet.
+- TTL comes from the smallest answer TTL (negative answers use `negative_ttl`),
+  clamped to `[min_ttl, max_ttl]`. Entries serve until they expire, with no
+  per-second TTL countdown. For the short TTLs you see internally, that's fine.
