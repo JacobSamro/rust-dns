@@ -5,3 +5,4 @@
 /cache.redb
 /cache.redb.lock
 *.log
+/cache.snapshot.json
