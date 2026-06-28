@@ -7,3 +7,5 @@
 /logs/
 *.log
 /cache.snapshot.json
+# Local agent guidance, not committed
+/CLAUDE.md
