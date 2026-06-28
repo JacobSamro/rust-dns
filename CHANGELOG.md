@@ -8,6 +8,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- One-line installer (`install.sh`) for Ubuntu / x86_64 Linux. It resolves the
+  latest release, verifies the checksum, installs into `/opt/rust-dns`, frees
+  port 53 from `systemd-resolved` if needed, and starts the service — printing
+  the generated admin token. Re-running upgrades in place without touching an
+  existing config or blocklist.
 - Load/stress harness (`tests/load.rs`, ignored by default) that drives a burst
   of concurrent UDP queries through the real binary. It reports throughput and
   latency percentiles but only asserts correctness invariants (no wrong answers,

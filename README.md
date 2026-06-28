@@ -14,8 +14,22 @@ It's meant to be boring in the good way: a single static binary plus two text
 files, fast enough to sit in front of a whole network, and simple enough to read
 in an afternoon. Contributions are welcome — see [Contributing](#contributing).
 
+## Install
+
+On Ubuntu (x86_64), one line. It grabs the latest release, checks the checksum,
+clears port 53 if `systemd-resolved` is holding it, then starts the service:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JacobSamro/rust-dns/master/install.sh | sh
+```
+
+It prints your admin token when it's done (it's generated on first run). Then
+open the portal at `http://127.0.0.1:8080`. On a different CPU, or if you'd
+rather build it yourself, see [Quick start](#quick-start).
+
 ## Contents
 
+- [Install](#install)
 - [Features](#features)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
