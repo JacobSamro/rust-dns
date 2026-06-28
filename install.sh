@@ -197,11 +197,12 @@ if systemctl is-active --quiet systemd-resolved; then
 	resolved_freed=1
 fi
 
-# Pre-flight: if something other than us still holds :53, say what, up front.
+# Pre-flight: if something *other than us* still holds :53, say what, up front.
+# (On upgrade, rust-dns already holds it — that's not a conflict.)
 if command -v ss >/dev/null 2>&1; then
-	busy=$($SUDO ss -lunpH 'sport = :53' 2>/dev/null || true)
+	busy=$($SUDO ss -lunpH 'sport = :53' 2>/dev/null | grep -v '"rust-dns"' || true)
 	if [ -n "$busy" ]; then
-		warn "port 53/udp still in use before starting rust-dns:"
+		warn "port 53/udp held by another process before starting rust-dns:"
 		printf '%s\n' "$busy" >&2
 		warn "if rust-dns fails to bind below, free this first (e.g. dnsmasq/named)."
 	fi
