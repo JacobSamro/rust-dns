@@ -121,11 +121,17 @@ if systemctl is-active --quiet systemd-resolved; then
 	# nss-resolve keeps host name resolution working without the stub.
 fi
 
-# ---- start the service ----
+# ---- start (or, on upgrade, restart onto the new binary) ----
 
-say "Starting rust-dns ..."
+if systemctl is-active --quiet rust-dns; then
+	say "Upgrading: restarting rust-dns onto the new binary ..."
+else
+	say "Starting rust-dns ..."
+fi
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable --now rust-dns
+$SUDO systemctl enable rust-dns >/dev/null 2>&1 || true
+# restart (not just start) so a running instance picks up the new binary.
+$SUDO systemctl restart rust-dns
 
 # Give it a moment to bind and (on first run) generate the admin token.
 i=0
