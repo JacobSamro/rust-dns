@@ -5,24 +5,29 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Working dir holds config.toml, blocklist.txt and cache.snapshot.json
+# Dedicated unprivileged user that owns /opt/rust-dns (created by install.sh).
+User=rust-dns
+Group=rust-dns
+# Working dir holds config.toml, blocklist.txt, cache.redb and logs/.
 WorkingDirectory=/opt/rust-dns
 ExecStart=/opt/rust-dns/rust-dns /opt/rust-dns/config.toml
 Restart=on-failure
 RestartSec=2
 Environment=RUST_LOG=info
 
-# Run unprivileged but still bind port 53.
-DynamicUser=yes
-StateDirectory=rust-dns
+# Bind port 53 without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
+
+# Sandbox: the filesystem is read-only except /opt/rust-dns, where the server
+# writes the generated token, the cache, and query logs.
 ProtectSystem=strict
 ProtectHome=yes
+PrivateTmp=yes
 ReadWritePaths=/opt/rust-dns
 
-# Graceful stop lets the cache snapshot flush.
+# Graceful stop lets the cache flush.
 KillSignal=SIGINT
 TimeoutStopSec=10
 

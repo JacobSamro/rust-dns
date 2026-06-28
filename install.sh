@@ -96,7 +96,55 @@ if [ ! -f "$PREFIX/blocklist.txt" ]; then
 	say "Wrote starter $PREFIX/blocklist.txt"
 fi
 
-$SUDO cp "$src/rust-dns.service" /etc/systemd/system/rust-dns.service
+# Write the unit here rather than copy it from the tarball, so unit fixes ship
+# with the installer (fetched fresh each run) without waiting for a new release.
+# Keep this in sync with deploy/rust-dns.service.
+$SUDO tee /etc/systemd/system/rust-dns.service >/dev/null <<UNIT
+[Unit]
+Description=rust-dns blocking DNS resolver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rust-dns
+Group=rust-dns
+WorkingDirectory=$PREFIX
+ExecStart=$PREFIX/rust-dns $PREFIX/config.toml
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+# Bind port 53 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+
+# Sandbox: filesystem read-only except the working dir.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=$PREFIX
+
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# Dedicated unprivileged user that owns the working dir. The service writes its
+# generated token, cache, and logs there, so it must own these files (a previous
+# DynamicUser= unit couldn't, which failed first-run token generation).
+if ! getent group rust-dns >/dev/null 2>&1; then
+	$SUDO groupadd --system rust-dns
+fi
+if ! id rust-dns >/dev/null 2>&1; then
+	$SUDO useradd --system --gid rust-dns --no-create-home \
+		--home-dir "$PREFIX" --shell /usr/sbin/nologin rust-dns
+	say "Created service user 'rust-dns'"
+fi
+$SUDO chown -R rust-dns:rust-dns "$PREFIX"
 
 if [ "${NO_START:-0}" = "1" ]; then
 	say "NO_START set — installed but not started."
@@ -147,7 +195,7 @@ done
 if ! systemctl is-active --quiet rust-dns; then
 	warn "service did not stay active. Recent logs:"
 	$SUDO journalctl -u rust-dns -n 20 --no-pager || true
-	err "rust-dns failed to start (port 53 may be held by another resolver — check 'sudo ss -lunp sport = :53')"
+	err "rust-dns failed to start — see the logs above. Common causes: port 53 already held by another resolver ('sudo ss -lunp sport = :53'), or a config error in $PREFIX/config.toml."
 fi
 
 say "rust-dns $tag is running."
