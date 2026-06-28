@@ -155,13 +155,16 @@ fields are saved to `config.toml` and take effect on the next restart.
 
 ## Deploy with systemd
 
-`deploy/rust-dns.service` runs the binary unprivileged but still binds port 53
-through `CAP_NET_BIND_SERVICE`.
+The [one-line installer](#install) handles this. For a manual source build,
+`deploy/rust-dns.service` runs the binary as a dedicated `rust-dns` user that
+owns `/opt/rust-dns`, binding port 53 unprivileged via `CAP_NET_BIND_SERVICE`.
 
 ```sh
 sudo mkdir -p /opt/rust-dns
 sudo cp target/release/rust-dns config.toml blocklist.txt /opt/rust-dns/
 sudo cp deploy/rust-dns.service /etc/systemd/system/
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin rust-dns
+sudo chown -R rust-dns:rust-dns /opt/rust-dns
 sudo systemctl daemon-reload && sudo systemctl enable --now rust-dns
 ```
 

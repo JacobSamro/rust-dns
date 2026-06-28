@@ -26,6 +26,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=/opt/rust-dns
+# Files the server writes (token in config.toml, cache, logs) stay owner-only.
+UMask=0077
 
 # Graceful stop lets the cache flush.
 KillSignal=SIGINT

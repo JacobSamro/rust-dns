@@ -8,11 +8,27 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/JacobSamro/rust-dns/master/install.sh | sh
 #
-# Env overrides: PREFIX=/opt/rust-dns  REPO=JacobSamro/rust-dns  NO_START=1
+# Env overrides:
+#   PREFIX=/opt/rust-dns       where to install
+#   REPO=JacobSamro/rust-dns   source repo
+#   NO_START=1                 install only; don't touch resolved or start
+#   SKIP_VERIFY=1              skip checksum verification (not recommended)
 set -eu
 
 REPO="${REPO:-JacobSamro/rust-dns}"
 PREFIX="${PREFIX:-/opt/rust-dns}"
+
+# PREFIX gets `chown -R`'d, so refuse anything that isn't a dedicated dir: it
+# must be an absolute path with at least two components and not live under a
+# system tree. This stops `PREFIX=/` or `/usr` from chowning the whole box.
+case "$PREFIX" in
+/*/?*) : ;;
+*) printf 'error: unsafe PREFIX %s — use an absolute path like /opt/rust-dns\n' "$PREFIX" >&2 && exit 1 ;;
+esac
+case "$PREFIX" in
+/usr/* | /bin/* | /sbin/* | /lib/* | /lib64/* | /etc/* | /boot/* | /dev/* | /proc/* | /sys/* | /run/* | /var/lib/* | /var/run/* | /var/log/*)
+	printf 'error: refusing PREFIX under a system directory: %s\n' "$PREFIX" >&2 && exit 1 ;;
+esac
 
 say() { printf '\033[1;32m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$1" >&2; }
@@ -65,13 +81,21 @@ trap 'rm -rf "$tmp"' EXIT
 
 say "Downloading $name.tar.gz ..."
 dlo "$base/$name.tar.gz" "$tmp/$name.tar.gz"
-dlo "$base/$name.tar.gz.sha256" "$tmp/$name.tar.gz.sha256" || true
 
-if [ -s "$tmp/$name.tar.gz.sha256" ] && command -v sha256sum >/dev/null 2>&1; then
-	say "Verifying checksum ..."
-	(cd "$tmp" && sha256sum -c "$name.tar.gz.sha256" >/dev/null) || err "checksum mismatch — refusing to install"
+# Verify by default; a failed/missing checksum is a hard stop, not a silent
+# skip. SKIP_VERIFY=1 is the explicit, documented opt-out.
+if [ "${SKIP_VERIFY:-0}" = "1" ]; then
+	warn "SKIP_VERIFY=1 — installing without verifying the checksum"
 else
-	warn "skipping checksum (no sha256sum or checksum file)"
+	command -v sha256sum >/dev/null 2>&1 ||
+		err "sha256sum not found — install coreutils, or re-run with SKIP_VERIFY=1"
+	dlo "$base/$name.tar.gz.sha256" "$tmp/$name.tar.gz.sha256" ||
+		err "could not download the checksum file — re-run with SKIP_VERIFY=1 to bypass"
+	[ -s "$tmp/$name.tar.gz.sha256" ] ||
+		err "checksum file is empty — re-run with SKIP_VERIFY=1 to bypass"
+	say "Verifying checksum ..."
+	(cd "$tmp" && sha256sum -c "$name.tar.gz.sha256" >/dev/null) ||
+		err "checksum mismatch — refusing to install"
 fi
 
 tar xzf "$tmp/$name.tar.gz" -C "$tmp"
@@ -95,6 +119,10 @@ if [ ! -f "$PREFIX/blocklist.txt" ]; then
 	printf 'facebook.com\n' | $SUDO tee "$PREFIX/blocklist.txt" >/dev/null
 	say "Wrote starter $PREFIX/blocklist.txt"
 fi
+
+# config.toml holds the admin token — keep it owner-only. The unit's UMask=0077
+# keeps it that way when the server rewrites it to persist the generated token.
+$SUDO chmod 600 "$PREFIX/config.toml"
 
 # Write the unit here rather than copy it from the tarball, so unit fixes ship
 # with the installer (fetched fresh each run) without waiting for a new release.
@@ -125,6 +153,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=$PREFIX
+# Files the server writes (token in config.toml, cache, logs) stay owner-only.
+UMask=0077
 
 KillSignal=SIGINT
 TimeoutStopSec=10
@@ -145,6 +175,7 @@ if ! id rust-dns >/dev/null 2>&1; then
 	say "Created service user 'rust-dns'"
 fi
 $SUDO chown -R rust-dns:rust-dns "$PREFIX"
+$SUDO systemctl daemon-reload
 
 if [ "${NO_START:-0}" = "1" ]; then
 	say "NO_START set — installed but not started."
@@ -154,19 +185,33 @@ fi
 # ---- free port 53 from systemd-resolved if it's squatting on it ----
 
 if systemctl is-active --quiet systemd-resolved; then
-	say "systemd-resolved is active; disabling its port-53 stub listener ..."
-	conf=/etc/systemd/resolved.conf
-	if [ -f "$conf" ] && [ ! -f "$conf.rust-dns.bak" ]; then
-		$SUDO cp "$conf" "$conf.rust-dns.bak"
-		say "Backed up $conf -> $conf.rust-dns.bak"
+	# Disabling the stub only keeps the host's own name resolution working if
+	# nss-resolve is wired into nsswitch (the Ubuntu default — resolved answers
+	# over D-Bus, not the :53 stub). If it isn't, editing this would cut the
+	# box's DNS, so bail and let the user pick a high port instead.
+	if ! grep -qE '^hosts:.*\bresolve\b' /etc/nsswitch.conf 2>/dev/null; then
+		warn "systemd-resolved holds port 53 but nss-resolve isn't in /etc/nsswitch.conf."
+		warn "Disabling its stub could break this host's DNS, so I won't. Options:"
+		warn "  - set dns.bind to a high port (e.g. \"0.0.0.0:5353\") in $PREFIX/config.toml, or"
+		warn "  - enable nss-resolve, then re-run."
+		err "aborting before changing systemd-resolved"
 	fi
-	if grep -q '^[#[:space:]]*DNSStubListener=' "$conf" 2>/dev/null; then
-		$SUDO sed -i 's/^[#[:space:]]*DNSStubListener=.*/DNSStubListener=no/' "$conf"
-	else
-		printf 'DNSStubListener=no\n' | $SUDO tee -a "$conf" >/dev/null
-	fi
+	say "Freeing port 53 from systemd-resolved (drop-in disables its stub listener) ..."
+	$SUDO mkdir -p /etc/systemd/resolved.conf.d
+	# A drop-in is cleanly reversible: remove this file + restart to undo.
+	printf '# Added by rust-dns installer. Delete and restart systemd-resolved to revert.\n[Resolve]\nDNSStubListener=no\n' |
+		$SUDO tee /etc/systemd/resolved.conf.d/10-rust-dns-no-stub.conf >/dev/null
 	$SUDO systemctl restart systemd-resolved
-	# nss-resolve keeps host name resolution working without the stub.
+fi
+
+# Pre-flight: if something other than us still holds :53, say what, up front.
+if command -v ss >/dev/null 2>&1; then
+	busy=$($SUDO ss -lunpH 'sport = :53' 2>/dev/null || true)
+	if [ -n "$busy" ]; then
+		warn "port 53/udp still in use before starting rust-dns:"
+		printf '%s\n' "$busy" >&2
+		warn "if rust-dns fails to bind below, free this first (e.g. dnsmasq/named)."
+	fi
 fi
 
 # ---- start (or, on upgrade, restart onto the new binary) ----
@@ -176,8 +221,8 @@ if systemctl is-active --quiet rust-dns; then
 else
 	say "Starting rust-dns ..."
 fi
-$SUDO systemctl daemon-reload
-$SUDO systemctl enable rust-dns >/dev/null 2>&1 || true
+$SUDO systemctl enable rust-dns >/dev/null 2>&1 ||
+	warn "could not enable rust-dns to start on boot"
 # restart (not just start) so a running instance picks up the new binary.
 $SUDO systemctl restart rust-dns
 
