@@ -13,6 +13,7 @@
 #   REPO=JacobSamro/rust-dns   source repo
 #   NO_START=1                 install only; don't touch resolved or start
 #   SKIP_VERIFY=1              skip checksum verification (not recommended)
+#   KEEP_RESOLV=1              don't repoint /etc/resolv.conf at rust-dns
 set -eu
 
 REPO="${REPO:-JacobSamro/rust-dns}"
@@ -184,24 +185,16 @@ fi
 
 # ---- free port 53 from systemd-resolved if it's squatting on it ----
 
+resolved_dropin=/etc/systemd/resolved.conf.d/10-rust-dns-no-stub.conf
+resolved_freed=0
 if systemctl is-active --quiet systemd-resolved; then
-	# Disabling the stub only keeps the host's own name resolution working if
-	# nss-resolve is wired into nsswitch (the Ubuntu default — resolved answers
-	# over D-Bus, not the :53 stub). If it isn't, editing this would cut the
-	# box's DNS, so bail and let the user pick a high port instead.
-	if ! grep -qE '^hosts:.*\bresolve\b' /etc/nsswitch.conf 2>/dev/null; then
-		warn "systemd-resolved holds port 53 but nss-resolve isn't in /etc/nsswitch.conf."
-		warn "Disabling its stub could break this host's DNS, so I won't. Options:"
-		warn "  - set dns.bind to a high port (e.g. \"0.0.0.0:5353\") in $PREFIX/config.toml, or"
-		warn "  - enable nss-resolve, then re-run."
-		err "aborting before changing systemd-resolved"
-	fi
 	say "Freeing port 53 from systemd-resolved (drop-in disables its stub listener) ..."
 	$SUDO mkdir -p /etc/systemd/resolved.conf.d
 	# A drop-in is cleanly reversible: remove this file + restart to undo.
 	printf '# Added by rust-dns installer. Delete and restart systemd-resolved to revert.\n[Resolve]\nDNSStubListener=no\n' |
-		$SUDO tee /etc/systemd/resolved.conf.d/10-rust-dns-no-stub.conf >/dev/null
+		$SUDO tee "$resolved_dropin" >/dev/null
 	$SUDO systemctl restart systemd-resolved
+	resolved_freed=1
 fi
 
 # Pre-flight: if something other than us still holds :53, say what, up front.
@@ -240,7 +233,27 @@ done
 if ! systemctl is-active --quiet rust-dns; then
 	warn "service did not stay active. Recent logs:"
 	$SUDO journalctl -u rust-dns -n 20 --no-pager || true
+	# We took port 53 from resolved but the server didn't come up — give the
+	# stub back so the host isn't left without a resolver.
+	if [ "$resolved_freed" = "1" ]; then
+		warn "restoring systemd-resolved (rust-dns failed to start)"
+		$SUDO rm -f "$resolved_dropin"
+		$SUDO systemctl restart systemd-resolved || true
+	fi
 	err "rust-dns failed to start — see the logs above. Common causes: port 53 already held by another resolver ('sudo ss -lunp sport = :53'), or a config error in $PREFIX/config.toml."
+fi
+
+# We disabled resolved's stub, so the host's old 127.0.0.53 resolver is gone.
+# Point the host at rust-dns itself (it forwards upstream) so its own name
+# resolution keeps working. KEEP_RESOLV=1 opts out for self-managed resolv.conf.
+if [ "$resolved_freed" = "1" ] && [ "${KEEP_RESOLV:-0}" != "1" ]; then
+	say "Pointing this host's DNS at rust-dns (/etc/resolv.conf -> 127.0.0.1) ..."
+	[ -e /etc/resolv.conf.rust-dns.bak ] ||
+		$SUDO cp -L /etc/resolv.conf /etc/resolv.conf.rust-dns.bak 2>/dev/null || true
+	# Replace a symlink with a real file; overwrite a regular file in place.
+	[ -L /etc/resolv.conf ] && $SUDO rm -f /etc/resolv.conf
+	printf '# Managed by rust-dns. Original saved at /etc/resolv.conf.rust-dns.bak\nnameserver 127.0.0.1\noptions edns0 trust-ad\n' |
+		$SUDO tee /etc/resolv.conf >/dev/null
 fi
 
 say "rust-dns $tag is running."
