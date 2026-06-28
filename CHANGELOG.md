@@ -6,6 +6,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Load/stress harness (`tests/load.rs`, ignored by default) that drives a burst
+  of concurrent UDP queries through the real binary. It reports throughput and
+  latency percentiles but only asserts correctness invariants (no wrong answers,
+  drop rate under a ceiling, single-flight holds under a thundering herd) so it
+  doesn't flake on noisy runners. A non-gating CI job runs it and posts the
+  numbers to the GitHub Actions job summary.
+
 ## [0.1.0] - 2026-06-27
 
 First release: a blocking DNS resolver with a web admin portal.

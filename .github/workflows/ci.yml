@@ -37,3 +37,22 @@ jobs:
 
       - name: Test (unit + e2e)
         run: cargo test --release --locked
+
+  load:
+    name: load test (Ubuntu, informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo & target
+        uses: Swatinem/rust-cache@v2
+
+      # Throughput/latency are reported to the job summary but never asserted —
+      # CI runners are noisy. The test only fails on correctness invariants
+      # (wrong answers, excessive drops, broken single-flight).
+      - name: Run load harness
+        run: cargo test --release --locked --test load -- --ignored --nocapture

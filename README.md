@@ -229,6 +229,16 @@ cargo fmt             # format
 cargo clippy          # lint
 ```
 
+There's also a load harness, ignored by default so it stays out of `cargo test`:
+
+```sh
+cargo test --release --test load -- --ignored --nocapture
+# tune the burst: RUST_DNS_LOAD_QUERIES=200000 RUST_DNS_LOAD_THREADS=128 ...
+```
+
+It prints throughput and latency percentiles (and a single-flight check) but only
+fails on correctness, not on perf numbers — those swing too much between machines.
+
 A few asks: keep changes focused, run `cargo fmt` and `cargo clippy` before
 opening a PR, and add a test when you fix a bug or add behavior. If you're
 planning something larger, open an issue first so we can talk it through.
